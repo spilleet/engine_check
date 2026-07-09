@@ -43,10 +43,10 @@ body {
 }
 
 .topbar {
-  display: grid;
-  grid-template-columns: minmax(360px, 1fr) 140px minmax(280px, 400px);
-  gap: 16px;
+  display: flex;
+  justify-content: space-between;
   align-items: center;
+  gap: 16px;
   padding-bottom: 8px;
   border-bottom: 1px solid #263244;
   flex-shrink: 0; /* 헤더 크기 보존 */
@@ -713,7 +713,10 @@ th {
 .log-entry.situation_query { border-left-color: var(--yellow); color: #ffe07a; }
 
 @media (max-width: 1360px) {
-  .topbar,
+  .topbar {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
   .layout {
     grid-template-columns: 1fr;
   }
