@@ -74,7 +74,7 @@ engine-check-dashboard/
 │   └── policy_comparison.png   # 정책 성과 비교 차트
 │
 ├── artifacts/                  # 학습 완료된 모델 파라미터 파일 (.joblib)
-├── .env                        # OpenAI API Key 설정 파일
+├── .env                        # OpenAI API Key 설정 파일(본인의 api키를 넣을 것)
 └── run_server.py               # 실시간 웹 API 및 이벤트 스트림 서버 구동기
 ```
 
