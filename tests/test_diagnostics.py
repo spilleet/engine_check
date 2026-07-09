@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+
+# MRO 에이전트 클래스 임포트
 from mro_simulator.mro_agents import (
     MaintenanceDiagnosticianAgent,
     ActionRecommendationAgent,
@@ -7,39 +9,48 @@ from mro_simulator.mro_agents import (
 )
 
 def test_diagnose_and_recommend():
-    # 1. 테스트용 가짜 데이터프레임 생성 (엔진 3대)
+    """
+    에이전트 파이프라인의 핵심인 진단(Diagnose), 처방 추천(Recommend), 
+    그리고 작업 보고서 마크다운 생성(Report) 기능을 통합 검증하는 유닛 테스트.
+    """
+    # 1. 테스트용 임시 가상 데이터프레임 생성 (엔진 3대 분량)
     data = {
         "unit": [1, 2, 3],
         "maintained": [False, False, False],
         "cycle": [10, 10, 10],
-        # 변동이 큰 센서 데이터 모사
+        # 특정 센서 계측치의 시계열 이동평균 변동치 모사
         "s_2_roll_mean_5": [10.0, 10.2, 10.1],
-        "s_11_roll_mean_5": [50.0, 50.5, 95.0], # Unit 3에서 s_11이 비정상적으로 높음
+        "s_11_roll_mean_5": [50.0, 50.5, 95.0],  # Unit 3의 s_11 센서값이 비정상적으로 높게 이탈
         "s_12_roll_mean_5": [30.0, 28.0, 29.0]
     }
     df = pd.DataFrame(data)
 
-    # 2. Diagnostician 검증 (중요도 가중치 결합)
+    # 2. Diagnostician 에이전트 검증 (Z-score 편위 분석 및 피처 중요도 결합)
+    # 특정 피처의 가중치를 0.5 및 0.1로 사전 정의
     importances = {"s_11_roll_mean_5": 0.5, "s_2_roll_mean_5": 0.1}
     diagnostician = MaintenanceDiagnosticianAgent(feature_importances=importances)
+    
+    # 3번 엔진(Unit 3)에 대해 진단 수행
     diag_result = diagnostician.diagnose(df, unit=3)
 
+    # 진단 단위가 Unit 3이고 검출된 센서 이상치 건수가 존재하는지 확인
     assert diag_result["unit"] == 3
     assert len(diag_result["anomalies"]) > 0
-    # z-score 편차가 가장 큰 s_11이 가장 상위에 올라와야 함
+    # Z-score 편차 가중 평균이 가장 높은 s_11이 최고 기여 요인(첫 번째 인덱스)에 올라왔는지 검증
     assert diag_result["anomalies"][0]["sensor"] == "s_11"
 
-    # 3. ActionRecommendation 검증
+    # 3. ActionRecommendation 에이전트 처방 매핑 검증
     recommender = ActionRecommendationAgent()
     rec_result = recommender.recommend(diag_result)
 
+    # 처방 대상 유닛이 일치하고 조치 항목(checklist)이 채워져 있는지 확인
     assert rec_result["unit"] == 3
     assert len(rec_result["checklist"]) > 0
-    # s_11에 대응하는 조치 내역 확인
+    # s_11 센서 이탈에 대해 연소기(Combustor) 계통 부품에 대한 세척/검사 처방이 생성되었는지 확인
     assert rec_result["checklist"][0]["sensor"] == "s_11"
     assert rec_result["checklist"][0]["part"] == "연소기 (Combustor)"
 
-    # 4. Report 생성 검증
+    # 4. MaintenanceReport 에이전트의 마크다운 보고서 자동 생성 포맷 검증
     reporter = MaintenanceReportAgent()
     report = reporter.generate_markdown(
         unit=3,
@@ -50,6 +61,7 @@ def test_diagnose_and_recommend():
         reason="테스트 결재 사유"
     )
 
+    # 보고서 마크다운 내에 장비 번호, 정비 필요 장비 부품명, 관제사 코멘트가 포함되어 있는지 검증
     assert "Unit #3" in report
     assert "연소기 (Combustor)" in report
     assert "테스트 결재 사유" in report
