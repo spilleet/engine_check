@@ -1,0 +1,5 @@
+policy,failures_before_maintenance,maintained_before_failure,critical_engines,critical_coverage_rate,mean_maintenance_day,late_maintenance_count
+orchestrator,0.0,100.0,25.0,1.0,16.17,0.0
+shortest_predicted_rul,0.0,100.0,25.0,1.0,16.17,0.0
+oldest_cycle,3.0,97.0,25.0,0.88,15.670103092783505,0.0
+random,10.0,90.0,25.0,0.6,14.5,0.0

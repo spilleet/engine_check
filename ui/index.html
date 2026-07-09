@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Fleet Commander (C-MAPSS FD001)</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1><span class="bolt">↯</span> Fleet 예지보전 HITL 관제 플랫폼</h1>
+        <p>C-MAPSS 가스 터빈 제트엔진 가동 현황 실시간 모니터링</p>
+      </div>
+      <div class="stats-header">
+        <div class="stat-badge">방어한 고장: <b id="protectedHeader">0회</b></div>
+      </div>
+      <div class="role-console">
+        <button class="role-btn active" data-role="tech">실무자 모드 🛠️</button>
+        <button class="role-btn" data-role="supervisor">상급자 모드 👑</button>
+      </div>
+      <div class="round-box">
+        <span>Stream Time</span>
+        <strong id="timeLabel">00:00</strong>
+      </div>
+      <div class="controls">
+        <button id="toggleStream" class="primary">실시간 스트림 시작</button>
+        <div class="speed">
+          <button class="speed-btn" data-speed="1">x1</button>
+          <button class="speed-btn active" data-speed="5">x5</button>
+          <button class="speed-btn" data-speed="20">x20</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <section class="panel fleet-panel">
+        <div class="panel-head">
+          <h2>⚙ Fleet Status (<span id="fleetSize">100</span> Engines)</h2>
+          <div class="legend">
+            <span><i class="dot healthy"></i>건강</span>
+            <span><i class="dot inspect"></i>점검요망</span>
+            <span><i class="dot danger"></i>위험(RUL&lt;20)</span>
+            <span><i class="dot pending"></i>결재대기</span>
+            <span><i class="dot under-maint"></i>정비중</span>
+            <span><i class="dot maintained"></i>정비완료</span>
+          </div>
+        </div>
+        <div id="fleetGrid" class="fleet-grid"></div>
+      </section>
+
+      <aside class="side">
+        <!-- 2대 업무 목적 중심 탭 콘솔 -->
+        <div class="tab-console">
+          <button class="tab-btn active" data-tab="tab-control">종합 관제 &amp; 결재</button>
+          <button class="tab-btn" data-tab="tab-log">결재 대기 &amp; 로그</button>
+        </div>
+
+        <div class="side-content">
+          <!-- Tab 1: 종합 관제 및 결재 뷰 -->
+          <div id="tab-control" class="tab-pane active">
+
+
+            <!-- 상황 조회 -->
+            <section class="panel summary-panel">
+              <h2>상황 조회 <span id="liveBadge" class="live-badge paused">PAUSED</span></h2>
+              <div class="summary-grid">
+                <div><span>건강</span><b id="healthyCount">0</b></div>
+                <div><span>점검</span><b id="inspectCount">0</b></div>
+                <div><span>위험</span><b id="dangerCount">0</b></div>
+                <div><span>정비완료</span><b id="maintainedCount">0</b></div>
+              </div>
+              <table>
+                <thead><tr><th>엔진</th><th>RUL</th><th>상태</th><th>불확실성</th></tr></thead>
+                <tbody id="riskRows"></tbody>
+              </table>
+            </section>
+
+            <!-- 엔진 상세 및 2단계 결재 -->
+            <section class="panel detail-panel">
+              <h2>Engine Detail</h2>
+              <div id="engineDetail" class="engine-detail empty">위험 엔진을 선택하세요.</div>
+              
+              <!-- 실무자 고도화: 주요 위험 요인 및 가이드 라인 컨테이너 -->
+              <div id="diagnosticsDetail" class="diagnostics-detail" style="display: none; margin-bottom: 14px;">
+                <h3>🔍 주요 위험 원인 분석 (Anomalies)</h3>
+                <div id="anomalyBars"></div>
+                <h3>📋 추천 정비 가이드라인</h3>
+                <ul id="recommendationList" class="rec-list"></ul>
+              </div>
+
+              <textarea id="decisionReason" placeholder="승인/보류/반려 사유를 입력"></textarea>
+              <div class="decision-buttons">
+                <button id="btnRequest" data-decision="approve" style="background: #2f67e8; border-color: #4376f0;">1차 상신</button>
+                <button id="btnFinalApprove" data-decision="approve_final" style="background: #12613c; border-color: #248b5b; display: none;">상급자 최종승인</button>
+                <button id="btnDefer" data-decision="defer">모니터링 보류</button>
+                <button id="btnReject" data-decision="reject">결재 반려</button>
+              </div>
+            </section>
+          </div>
+
+          <!-- Tab 2: 결재 대기 및 행정 로그 뷰 -->
+          <div id="tab-log" class="tab-pane">
+            <!-- 결재 대기 큐 -->
+            <section class="panel queue-panel">
+              <h2>Critical Queue</h2>
+              <div id="criticalQueue" class="critical-queue"></div>
+            </section>
+
+            <!-- 작업 지서 로그 -->
+            <section class="panel work-panel">
+              <h2>Work Order Log</h2>
+              <div id="workOrders" class="work-orders"></div>
+            </section>
+
+            <!-- 에이전트 추론 로그 -->
+            <section class="panel log-panel">
+              <h2><span class="blue-dot"></span> Agent Reasoning Trace (LLM Log)</h2>
+              <div id="agentLog" class="log"></div>
+            </section>
+          </div>
+        </div>
+      </aside>
+    </div>
+  <!-- 작업 완료 보고서 모달 팝업 -->
+  <div id="reportModal" class="modal">
+    <div class="modal-content">
+      <span class="close-btn" id="closeModal">&times;</span>
+      <div id="modalBody" class="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
