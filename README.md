@@ -77,6 +77,11 @@ engine-check-dashboard/
 ├── .env                        # OpenAI API Key 설정 파일(본인의 api키를 넣을 것)
 └── run_server.py               # 실시간 웹 API 및 이벤트 스트림 서버 구동기
 ```
+#워크플로우
+<img width="664" height="1550" alt="image" src="https://github.com/user-attachments/assets/7398abbd-12ba-40b7-ad4f-095a73da4bce" />
+
+#에이전트플로우
+<img width="1706" height="498" alt="image" src="https://github.com/user-attachments/assets/9622bfc6-99e5-4266-8d40-d33e49eec555" />
 
 ---
 
