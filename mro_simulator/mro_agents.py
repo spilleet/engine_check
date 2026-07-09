@@ -369,10 +369,10 @@ class ActionRecommendationAgent:
 class MaintenanceReportAgent:
     """
     모듈식으로 추천된 정비 가이드 체크리스트와 장비 계측 데이터를 융합해
-    현장 서명 서식이 포함된 표준 마크다운(Markdown) 정비작업 보고서를 자동 발행하는 리포트 에이전트.
+    현장 서명 서식이 포함된 표준 마크다운(Markdown) 정비 작업 지시서를 자동 발행하는 리포트 에이전트.
     """
     def _generate_static_markdown(self, unit: int, cycle: int, predicted_rul: float, uncertainty: float, recommendations: dict, reason: str = "") -> str:
-        """API 호출 실패 혹은 API Key 부재 시 활용할 Fallback 정적 마크다운 보고서 생성기."""
+        """API 호출 실패 혹은 API Key 부재 시 활용할 Fallback 정적 마크다운 작업 지시서 생성기."""
         checklist_md = ""
         for idx, item in enumerate(recommendations.get("checklist", []), 1):
             checklist_md += f"{idx}. **[{item['part']}]** {item['action']} (센서 {item['sensor']} {item['deviation']} 감지, 예상 소요 시간: {item['hours']}시간)\n"
@@ -380,13 +380,13 @@ class MaintenanceReportAgent:
         if not checklist_md:
             checklist_md = "1. **[엔진 전체]** 일반 예방정비 및 센서 오정렬 교정 작업 (예상 소요 시간: 1.0시간)\n"
 
-        report = f"""# 🛠️ 정비 작업 오더 완료 보고서 (Work Order Report)
+        report = f"""# 🛠️ 정비 작업 지시서 (Work Order)
 
 ## 1. 장비 기본 정보
 * **대상 장비**: 제트 엔진 Unit #{unit}
 * **현재 구동 시간**: {cycle} Cycles
 * **정비 시점 예측 RUL**: {predicted_rul:.1f} Cycles (예측 오차 신뢰도 불확실성: ±{uncertainty:.1f})
-* **보고서 생성일**: 실시간 시뮬레이션 기반 자동 작성
+* **지시서 생성일**: 실시간 시뮬레이션 기반 자동 작성
 
 ## 2. 작업 사유 및 결재자 코멘트
 > {reason or "현장 정비사의 AI 처방 승인에 따라 스케줄링됨."}
@@ -405,7 +405,7 @@ class MaintenanceReportAgent:
 
     def generate_markdown(self, unit: int, cycle: int, predicted_rul: float, uncertainty: float, recommendations: dict, reason: str = "", maintenance_count: int = 0) -> str:
         """
-        정비 장비 기본 정보와 점검 내역을 토대로 작업 완료 지시서 문서를 생성합니다.
+        정비 장비 기본 정보와 점검 내역을 토대로 정비 작업 지시서 문서를 생성합니다.
         로컬 환경의 OPENAI_API_KEY 존재 여부에 따라 LLM(GPT)을 호출하거나 정적 폴백(Fallback) 방식을 채택합니다.
         """
         import os
@@ -427,7 +427,7 @@ class MaintenanceReportAgent:
                 
             prompt = f"""
 당신은 항공 제트엔진 정비 오퍼레이션 총괄 엔지니어입니다.
-아래의 엔진 텔레메트리 이상 진단 정보 및 현장 작업 사유 코멘트를 기반으로, 실제 정비사(Field Technician)가 즉각 참조하고 안심하며 작업할 수 있도록 '실무 지향적인 전문 정비 보고서'를 한국어로 작성해 주십시오.
+아래의 엔진 텔레메트리 이상 진단 정보 및 현장 작업 사유 코멘트를 기반으로, 실제 정비사(Field Technician)가 즉각 참조하고 안심하며 작업할 수 있도록 '실무 지향적인 전문 정비 작업 지시서'를 한국어로 작성해 주십시오.
 
 ### 입력 데이터
 1. **대상 장비**: 제트 엔진 Unit #{unit}
@@ -438,7 +438,7 @@ class MaintenanceReportAgent:
 {anomalies_info}
 6. **현장 결재 코멘트 / 정비 사유**: "{reason or '현장 정비사의 AI 처방 승인에 따라 스케줄링됨.'}"
 
-### 실무자용 보고서 작성 가이드라인 (반드시 다음 내용을 포함하여 논리적이고 친절하게 서술하십시오):
+### 실무자용 작업 지시서 작성 가이드라인 (반드시 다음 내용을 포함하여 논리적이고 친절하게 서술하십시오):
 1. **🔍 이상 센서의 현장적 의미 설명 (Root-Cause Analysis)**: 
    - 감지된 이상 센서들이 기계공학적으로 무엇을 의미하는지 해석해 주십시오. 
      (예: s_11(연소기) 온도가 오르고 있다면 연료 분사 노즐 카본 축적이나 연료 배관 누설 의심 등)
@@ -449,11 +449,11 @@ class MaintenanceReportAgent:
 4. **⏳ 장비 피로 누적 및 위험 경고 (Wear-Out Warning)**:
    - 누적 정비 횟수에 따라 실무자가 주의해야 할 피로도 마모 경고 및 점검 팁을 포함하십시오.
 5. **📝 점검 완료 후 서명 양식**:
-   - 마지막에 정비 완료 보고 서명 란을 깔끔하게 포함하십시오.
+   - 마지막에 점검 완료 및 정비 서명 란을 깔끔하게 포함하십시오.
 
 ### 출력 형식:
 - GitHub Markdown 문법을 사용해 예쁘고 구조화된 양식으로 출력하십시오.
-- 불필요한 서론(예: "네, 보고서를 작성해 드리겠습니다")이나 결론 잡담 없이 바로 '# 🛠️ 정비 작업 오더 완료 보고서' 제목으로 시작하십시오.
+- 불필요한 서론(예: "네, 지시서를 작성해 드리겠습니다")이나 결론 잡담 없이 바로 '# 🛠️ 정비 작업 지시서' 제목으로 시작하십시오.
 """
             response = client.chat.completions.create(
                 model="gpt-4o-mini",

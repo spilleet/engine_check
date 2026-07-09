@@ -300,7 +300,7 @@ function renderWorkOrders(orders) {
   }
   $("workOrders").innerHTML = orders.map((order) => {
     const reportBtn = order.report_md ? `
-      <button class="view-report-btn" data-order-id="${order.id}">📋 정비 완료 보고서 보기</button>
+      <button class="view-report-btn" data-order-id="${order.id}">📋 정비 작업 지시서 보기</button>
     ` : "";
     return `
       <div class="work-order ${order.decision}">
@@ -312,7 +312,7 @@ function renderWorkOrders(orders) {
     `;
   }).join("");
 
-  // 보고서 보기 버튼 리스너 바인딩
+  // 지시서 보기 버튼 리스너 바인딩
   document.querySelectorAll(".view-report-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const orderId = btn.dataset.orderId;
@@ -426,7 +426,7 @@ function parseMarkdown(md) {
   /**
    * 지서 마크다운 문서를 보기용 모달 팝업을 위해 HTML 코드로 단순 치환 변환합니다.
    */
-  if (!md) return "보고서 내용이 존재하지 않습니다.";
+  if (!md) return "지시서 내용이 존재하지 않습니다.";
   let html = md;
   html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
   html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');

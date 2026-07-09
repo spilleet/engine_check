@@ -208,8 +208,8 @@ class RealtimeFleetSimulator:
     def manual_decision(self, unit: int, decision: str, reason: str = "") -> dict:
         """
         인간 관제사 개입(HITL)에 따른 2단계 의사결정을 실시간 반영합니다.
-        1. `approve`: 실무자 정비 오더 1차 상신. (상급자 결재 대기 `pending_supervisor` 격상 및 처방 지시서 마크다운 생성)
-        2. `approve_final`: 상급자 최종 승인. (입고 대기 `under_maintenance` 상태 활성화 및 3틱 타이머 돌입, 완료 보고서 로컬 파일 저장)
+        1. `approve`: 실무자 정비 오더 1차 상신. (상급자 결재 대기 `pending_supervisor` 격상 및 정비 작업 지시서 마크다운 생성)
+        2. `approve_final`: 상급자 최종 승인. (입고 대기 `under_maintenance` 상태 활성화 및 3틱 타이머 돌입, 정비 작업 지시서 로컬 파일 저장)
         3. `defer`: 실무자 모니터링 보류. (기여 가중치 `human_modifier`를 0.5로 낮추어 리스크 경보 완화)
         4. `reject`: 결재 반려 및 종결.
         """
@@ -224,7 +224,7 @@ class RealtimeFleetSimulator:
             # [1단계] 실무자 결재 요청 상신
             self.frame.loc[idx, "pending_supervisor"] = True
             
-            # 센서 데이터 진단 후 정비 오더 체크리스트 및 보고서 초안 생성
+            # 센서 데이터 진단 후 정비 오더 체크리스트 및 작업 지시서 초안 생성
             diag = self.diagnostician.diagnose(self.frame, unit)
             rec = self.recommender.recommend(diag)
             report_md = self.reporter.generate_markdown(
@@ -267,7 +267,7 @@ class RealtimeFleetSimulator:
                     order["status"] = "under_maintenance"
                     order["time"] = now
                     
-                    # 보고서 아카이브 디렉토리에 마크다운 형식의 서명 보고서 내보내기 파일 저장
+                    # 작업 지시서 아카이브 디렉토리에 마크다운 형식의 서명 지시서 파일 저장
                     try:
                         out_dir = ROOT / "reports" / "submitted_orders"
                         out_dir.mkdir(parents=True, exist_ok=True)

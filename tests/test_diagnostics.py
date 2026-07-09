@@ -65,3 +65,7 @@ def test_diagnose_and_recommend():
     assert "Unit #3" in report
     assert "연소기 (Combustor)" in report
     assert "테스트 결재 사유" in report
+
+if __name__ == "__main__":
+    test_diagnose_and_recommend()
+    print("All tests passed successfully!")
