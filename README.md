@@ -1,78 +1,125 @@
-# NASA C-MAPSS FD001 RUL + Fleet Maintenance Agent
+# ✈️ ENGINE CHECK AGENT: 제트엔진 예지보전 & HITL MRO 관제 플랫폼
 
-This project trains an RUL predictor on NASA C-MAPSS FD001 and runs a fleet maintenance simulation with limited maintenance slots.
+본 프로젝트는 NASA C-MAPSS 가스 터빈 제트엔진 데이터셋을 활용하여 **기계학습 기반의 잔존 수명(RUL) 예측**을 수행하고, 이를 **다중 에이전트(Multi-Agent)와 인간 결재(HITL, Human-In-The-Loop) 프로세스**와 결합하여 제한된 정비 자원 속에서 예방정비 스케줄링을 최적화하는 실시간 관제 플랫폼입니다.
 
-## Quick Start
+---
 
-```bash
-cd /Users/idong-ug/Documents/Codex/2026-07-08/nasa-c-mapss-fd001-ai-rul/outputs/cmapss_fd001_agent
-python3 run_experiment.py
-python3 build_agent_ui.py
-python3 realtime_server.py --port 8765
+## 🌟 핵심 기능 (Core Features)
+
+### 1. 🤖 머신러닝 기반 RUL 예지 및 불확실성 산출
+* **앙상블 예측**: Random Forest Regressor 앙상블 모델을 학습시켜 실시간 가동 제트엔진의 잔존 수명(RUL)을 예측합니다.
+* **불확실성($\sigma$) 실시간 연산**: 개별 Decision Tree 예측치들의 표준편차를 기반으로 모델의 예측 **불확실성(Uncertainty)**을 도출하여 의사결정의 신뢰도를 제공합니다.
+* **구간 선형 모델(Piecewise Linear) 학습**: 조기 마모 데이터 노이즈 오인 방지를 위해 RUL 상한선을 **125 사이클**로 클리핑하여 예측 정확도(RMSE)를 최적화했습니다.
+
+### 2. 👥 7대 에이전트 기반 MRO 협동 파이프라인
+* **TelemetryStreamAgent**: 엔진의 비행 사이클 증가 및 RUL 차감, 정비 복원을 관리하는 시간 제어 장치.
+* **CrisisDetectionAgent**: RUL 임계치(Danger: 20, Inspect: 50) 기준 등급 분류 및 리스크 점수(`risk_score`) 연산.
+* **SituationQueryAgent**: 함대 건강 요약 통계 및 실시간 상위 위험군 큐(Critical Queue) 도출.
+* **MaintenanceActionAgent**: 하루 정비소 수용 한계(슬롯 3개) 내에서 가장 시급한 엔진 우선 추천.
+* **MaintenanceDiagnosticianAgent**: 데이터 통계 변위($Z$-score)와 모델 피처 중요도를 결합해 이상 징후 발생 센서(TOP 3) 정밀 진단.
+* **ActionRecommendationAgent**: 진단 부품별 조치 지침 및 예상 소요 공임(Man-Hours) 가이드 매핑.
+* **MaintenanceReportAgent**: OpenAI API 연동을 통한 지능형 정비 작업 지시서 작성.
+
+### 3. ✍️ OpenAI LLM 기반 지능형 정비 작업 지시서 (Work Order)
+* **GPT-4o-mini 실시간 연동**: 상급자 최종 결재 승인 시, 실무자가 즉시 작업에 투입될 수 있는 고품질 한글 작업 지시서를 실시간 생성합니다.
+* **실무 맞춤형 지침 구성**:
+  * **이상 센서의 기계공학적 원인(Root-Cause)** 해설
+  * 작업 소요 시간 단축을 위한 **점검 우선순위(Priority)** 가이드
+  * 현장 정비 시 구비해야 할 **준비 자재** 목록
+  * 고온/고압 환경에서의 필수 안전 규칙인 **LOTO(Lockout-Tagout) 및 잔압 제거 수칙**
+  * 엔진 누적 정비 횟수에 따른 **장비 피로 마모 주의보**
+* **자가 안정성(Fallback) 설계**: API 키 미설정 또는 네트워크 차단 시 시스템 마비를 방지하기 위해 정적 가이드라인 템플릿으로 자동 우회 구동됩니다.
+
+### 4. 👥 인간 개입 기반 2단계 결재 워크플로우 (HITL)
+* **실무자 모드 (Technician)**: AI의 정비 권고안을 모니터링하고, 현장 소견을 기록하여 **1차 작업지서 상신(Approve)** 또는 **관제 보류(Defer, 리스크 경보 50% 완화)**를 입력합니다.
+* **상급자 모드 (Supervisor)**: 상신된 작업지서와 AI의 예비 지침서 초안을 검토 후 **최종 승인(Approve Final)** 또는 **반려(Reject)** 처리합니다.
+* **타이머 연동**: 최종 승인이 떨어지는 순간에만 실제 정비소 입고 타이머(3틱)가 돌입하며, 서명이 기재된 작업 지시서가 로컬 마크다운 파일로 아카이빙 저장됩니다.
+
+### 5. ⚡ 실시간 SSE 스트림 반응형 다크모드 대시보드
+* **Server-Sent Events(SSE)**: 폴링 없이 1초마다 실시간으로 100대 제트엔진의 텔레메트리 스트림 데이터 수신.
+* **그리드 뷰 시각화**: 엔진의 실시간 건강 등급을 색상 카드(건강: 녹색, 점검: 황색, 위험: 적색, 결재대기: 주황)로 표기하며, 정비 중인 엔진은 보라색 펄스 애니메이션이 활성화됩니다.
+* **실시간 통계 및 차트**: 전체 함대 요약 통계 배지, 위험도 정렬 뷰, 그리고 현재 클릭한 엔진의 각 센서별 변동 추이($Z$-score) 차트를 실시간으로 갱신 렌더링합니다.
+
+### 6. 📊 4대 정비 정책 비교 시뮬레이션
+* 제약된 슬롯 하에서 어떤 정책이 정비 비용과 고장률을 최소화하는지 비교 분석을 지원합니다.
+  1. `orchestrator` (AI 종합 리스크 기반 배정 - 제안 방식)
+  2. `shortest_predicted_rul` (단순 잔여 수명 우선)
+  3. `oldest_cycle` (가장 오래 비행한 기체 우선)
+  4. `random` (무작위 수리)
+
+---
+
+## 📁 프로젝트 구조 (Project Structure)
+
+```directory
+engine-check-dashboard/
+│
+├── mro_simulator/              # MRO 에이전트 및 시뮬레이션 핵심 로직
+│   ├── data_loader.py          # 시계열 이동평균 등 롤링 피처 전처리
+│   ├── benchmark_predictor.py  # Random Forest 기반 RUL 예측 및 불확실성 연산
+│   ├── fleet_engine.py         # 정책 시뮬레이터 (오프라인 정책 비교)
+│   └── mro_agents.py           # 7대 역할별 MRO 에이전트 파이프라인
+│
+├── ui/                         # 관제 콘솔 웹 프론트엔드 자원
+│   ├── index.html              # 메인 대시보드 마크업
+│   ├── styles.css              # 다크모드 그리드 디자인 및 모달 스타일
+│   ├── app.js                  # SSE 이벤트 수신 및 REST API 제어 스크립트
+│   └── agent_state.json        # 오프라인 구동 스냅샷 데이터
+│
+├── tests/                      # 테스트 스크립트
+│   └── test_diagnostics.py     # 유닛 및 통합 테스트
+│
+├── reports/                    # 분석 산출물 및 생성된 작업지시서 아카이브
+│   ├── submitted_orders/       # 최종 결재 완료된 마크다운 작업지시서 (.md)
+│   └── policy_comparison.png   # 정책 성과 비교 차트
+│
+├── artifacts/                  # 학습 완료된 모델 파라미터 파일 (.joblib)
+├── .env                        # OpenAI API Key 설정 파일
+└── run_server.py               # 실시간 웹 API 및 이벤트 스트림 서버 구동기
 ```
 
-Open `http://localhost:8765` to run the agent pipeline UI.
+---
 
-Default data paths:
+## 🚀 구동 및 실행 방법 (How to Run)
 
-- `/Users/idong-ug/Downloads/pdm_agent/data/train_FD001.txt`
-- `/Users/idong-ug/Downloads/pdm_agent/data/test_FD001.txt`
-- `/Users/idong-ug/Downloads/pdm_agent/data/RUL_FD001.txt`
-
-Override them if needed:
-
+### 0. 환경 구성 및 의존 라이브러리 설치
 ```bash
-python3 run_experiment.py \
-  --train /path/to/train_FD001.txt \
-  --test /path/to/test_FD001.txt \
-  --rul /path/to/RUL_FD001.txt \
-  --slots 3 \
-  --horizon 160
+pip install -r requirements.txt
+```
+* API 호출 키를 사용하려면 프로젝트 루트에 `.env` 파일을 만들고 키를 등록해 주십시오:
+  `OPENAI_API_KEY="sk-proj-..."`
+
+### 1. 예측 모델 학습 및 오프라인 시뮬레이션 비교 실행
+```bash
+python3 train_model.py
+```
+* Random Forest 모델을 훈련하여 저장하고, 정책 비교 차트(`reports/policy_comparison.png`) 및 분석 데이터(`reports/fleet_policy_comparison.csv`)를 빌드합니다.
+
+### 2. 실시간 웹 관제 대시보드 서버 기동
+```bash
+python3 run_server.py
+```
+* 대시보드 서버를 켠 뒤, 크롬 등의 브라우저를 열고 다음 주소에 접속합니다:
+  * 👉 **[http://127.0.0.1:8765](http://127.0.0.1:8765)**
+* `실시간 스트림 시작`을 누르면 비행 관제가 동작하며 결재 테스트를 시작할 수 있습니다.
+
+### 3. 에이전트 로직 유닛 테스트 실행
+```bash
+PYTHONPATH=. python3 tests/test_diagnostics.py
 ```
 
-## What It Does
+---
 
-1. Loads FD001 train/test/RUL files.
-2. Builds capped RUL labels for training (`cap=125` by default).
-3. Trains a Random Forest RUL model with group-aware validation by engine ID.
-4. Evaluates test-set RUL at each engine's latest observed cycle.
-5. Builds a round-based agent pipeline:
-   - `TelemetryStreamAgent`: streams current engine telemetry frames.
-   - `RULPredictorAgent`: predicts RUL from the trained model.
-   - `CrisisDetectionAgent`: flags inspection and danger states.
-   - `SituationQueryAgent`: summarizes fleet status and top risks.
-   - `MaintenanceActionAgent`: assigns limited maintenance slots.
-6. Simulates fleet maintenance under limited slots and compares policies:
-   - `orchestrator`: predicted RUL priority with uncertainty/risk tie-breakers.
-   - `shortest_predicted_rul`: pure predicted RUL priority.
-   - `oldest_cycle`: prioritize engines with the longest observed cycles.
-   - `random`: random baseline.
+## 💰 정비 비용 및 수명 복원 물리 모델
 
-## Realtime Operator Workflow
+플랫폼은 기계공학적 감쇠 이론과 정비 비용 경제성을 수학적으로 모사합니다.
 
-The realtime UI supports a maintenance operator workflow:
-
-- `Critical Queue`: prioritized engines needing immediate maintenance or inspection.
-- `Engine Detail`: RUL, uncertainty, status, risk score, and explanation.
-- `Approval Panel`: approve, defer, or reject an agent recommendation with a reason.
-- `Work Order Log`: generated work orders and audit trail for human decisions.
-- `Agent Reasoning Trace`: live stream of crisis detection, situation query, action, and human approval events.
-
-## Outputs
-
-The run creates:
-
-- `reports/metrics.json`
-- `reports/fleet_policy_comparison.csv`
-- `reports/orchestrator_decisions.csv`
-- `reports/test_predictions.csv`
-- `reports/top_risk_engines.csv`
-- `reports/dashboard.html`
-- `reports/policy_comparison.png`
-- `reports/rul_prediction_diagnostics.png`
-- `reports/maintenance_timeline.png`
-- `ui/index.html`
-- `ui/app.js`
-- `realtime_server.py`
-- `ui/agent_state.json` from the legacy precomputed mode
-- `artifacts/rul_model.joblib`
+* **정비 경제성 지표**:
+  * **예방 정비 수행**: 회당 **$8,000** 소모 (RUL 30 이하 시점 정비)
+  * **미정비 고장 방치 (Failure)**: 회당 **$50,000** 페널티 벌금 소모 (RUL이 0에 도달하여 엔진 정지 시 발생)
+* **정비 물리 효과**:
+  * 정비 슬롯 통과 시 정비 수준(정밀 수리한 센서 수)에 따라 수명이 차등 복원됩니다:
+    * 이상 센서 3개 이상 정밀 정비 시: RUL 최대 한도의 **$96\%$** 수준으로 복원
+    * 이상 센서 2개 정밀 정비 시: RUL 최대 한도의 **$80\%$** 수준으로 복원
+    * 이상 센서 1개 이하 정밀 정비 시: RUL 최대 한도의 **$65\%$** 수준으로 복원
+  * **누적 피로 페널티 (Wear-Out Penalty)**: 정비를 한 번 겪을 때마다 기체 피로 누적으로 인해 최대 복원 한계선이 매회 **10 사이클씩 감소**하여 점진적인 노후화 상태를 물리적으로 반영합니다.
