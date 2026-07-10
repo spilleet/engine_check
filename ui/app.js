@@ -292,7 +292,7 @@ async function renderEngineDetail() {
 
 function renderWorkOrders(orders) {
   /**
-   * 발행된 전체 정비 지서 레코드 로그 목록을 그리고, 보고서 확인용 팝업 리스너를 매핑합니다.
+   * 발행된 전체 정비 지시서 레코드 로그 목록을 그리고, 지시서 확인용 팝업 리스너를 매핑합니다.
    */
   if (!orders.length) {
     $("workOrders").innerHTML = `<div class="empty-line">아직 발행된 작업지시가 없습니다.</div>`;

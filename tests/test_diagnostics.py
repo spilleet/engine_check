@@ -11,7 +11,7 @@ from mro_simulator.mro_agents import (
 def test_diagnose_and_recommend():
     """
     에이전트 파이프라인의 핵심인 진단(Diagnose), 처방 추천(Recommend), 
-    그리고 작업 보고서 마크다운 생성(Report) 기능을 통합 검증하는 유닛 테스트.
+    그리고 작업 지시서 마크다운 생성(Report) 기능을 통합 검증하는 유닛 테스트.
     """
     # 1. 테스트용 임시 가상 데이터프레임 생성 (엔진 3대 분량)
     data = {
@@ -50,7 +50,7 @@ def test_diagnose_and_recommend():
     assert rec_result["checklist"][0]["sensor"] == "s_11"
     assert rec_result["checklist"][0]["part"] == "연소기 (Combustor)"
 
-    # 4. MaintenanceReport 에이전트의 마크다운 보고서 자동 생성 포맷 검증
+    # 4. MaintenanceReport 에이전트의 마크다운 작업 지시서 자동 생성 포맷 검증
     reporter = MaintenanceReportAgent()
     report = reporter.generate_markdown(
         unit=3,
@@ -61,7 +61,7 @@ def test_diagnose_and_recommend():
         reason="테스트 결재 사유"
     )
 
-    # 보고서 마크다운 내에 장비 번호, 정비 필요 장비 부품명, 관제사 코멘트가 포함되어 있는지 검증
+    # 지시서 마크다운 내에 장비 번호, 정비 필요 장비 부품명, 관제사 코멘트가 포함되어 있는지 검증
     assert "Unit #3" in report
     assert "연소기 (Combustor)" in report
     assert "테스트 결재 사유" in report
