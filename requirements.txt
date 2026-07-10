@@ -5,3 +5,5 @@ matplotlib
 joblib
 openai
 python-dotenv
+langchain
+langchain-openai

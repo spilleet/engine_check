@@ -414,9 +414,6 @@ class MaintenanceReportAgent:
             return self._generate_static_markdown(unit, cycle, predicted_rul, uncertainty, recommendations, reason)
         
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
-            
             # 피처 이상 상태 문자열 가공
             anomalies_info = ""
             for item in recommendations.get("checklist", []):
@@ -455,15 +452,18 @@ class MaintenanceReportAgent:
 - GitHub Markdown 문법을 사용해 예쁘고 구조화된 양식으로 출력하십시오.
 - 불필요한 서론(예: "네, 지시서를 작성해 드리겠습니다")이나 결론 잡담 없이 바로 '# 🛠️ 정비 작업 지시서' 제목으로 시작하십시오.
 """
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "당신은 항공 제트엔진 정비 매뉴얼 및 기술 문서 작성 전문가입니다."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2, # 일관되고 객관적인 보고서 작성을 위해 온도 낮춤
-            )
-            report = response.choices[0].message.content
+            # LangChain LCEL 파이프라인 구성 및 호출
+            from langchain_openai import ChatOpenAI
+            from langchain_core.prompts import ChatPromptTemplate
+            from langchain_core.output_parsers import StrOutputParser
+
+            chat = ChatOpenAI(model="gpt-4o-mini", temperature=0.2, openai_api_key=api_key)
+            prompt_template = ChatPromptTemplate.from_messages([
+                ("system", "당신은 항공 제트엔진 정비 매뉴얼 및 기술 문서 작성 전문가입니다."),
+                ("user", "{prompt_text}")
+            ])
+            chain = prompt_template | chat | StrOutputParser()
+            report = chain.invoke({"prompt_text": prompt})
             return report.strip()
             
         except Exception as exc:
