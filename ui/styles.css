@@ -711,6 +711,7 @@ th {
 .log-entry.action_agent { border-left-color: var(--blue); color: #8ec1ff; }
 .log-entry.crisis_detector { border-left-color: var(--red); color: #ff9aa0; }
 .log-entry.situation_query { border-left-color: var(--yellow); color: #ffe07a; }
+.log-entry.smart_alert_agent { border-left-color: #ff5f33; color: #ffab91; font-weight: 800; }
 
 @media (max-width: 1360px) {
   .topbar {

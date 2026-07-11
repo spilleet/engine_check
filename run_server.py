@@ -23,6 +23,7 @@ from mro_simulator.mro_agents import (
     ActionRecommendationAgent,
     MaintenanceReportAgent,
 )
+from mro_simulator.alert_agent import SmartAlertAgent
 
 # 루트 경로 및 UI 정적 리소스 파일이 들어있는 ui 디렉토리 경로 지정
 ROOT = Path(__file__).resolve().parent
@@ -57,6 +58,10 @@ class RealtimeFleetSimulator:
         self.diagnostician = MaintenanceDiagnosticianAgent(feature_importances=importances)
         self.recommender = ActionRecommendationAgent()
         self.reporter = MaintenanceReportAgent()
+        
+        # SmartAlertAgent 초기화 (환경 변수의 API 키 전달)
+        import os
+        self.alert_agent = SmartAlertAgent(api_key=os.environ.get("OPENAI_API_KEY"))
         
         self.tick = 0        # 시뮬레이션 경과 시간(초 단위)
         self.pointer = 0     # 텔레메트리 값을 순차 감소시키기 위해 활성 엔진을 가리키는 순환 포인터
@@ -406,6 +411,16 @@ class RealtimeFleetSimulator:
                         "time": now,
                         "agent": "crisis_detector",
                         "message": f"엔진 #{unit} 상태 전이: {previous} → {current}. 예측 RUL {row.rul:.1f}.",
+                    }
+                )
+                
+                # SmartAlertAgent 호출하여 최적의 알람 전송 수단 판별
+                alert_desc = self.alert_agent.run_alert_logic(unit, self.tick, current, float(row.rul))
+                self.events.append(
+                    {
+                        "time": now,
+                        "agent": "smart_alert_agent",
+                        "message": f"[알람 에이전트] {alert_desc}"
                     }
                 )
             self.last_status[unit] = current

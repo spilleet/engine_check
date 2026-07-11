@@ -7,6 +7,7 @@ from mro_simulator.mro_agents import (
     ActionRecommendationAgent,
     MaintenanceReportAgent,
 )
+from mro_simulator.alert_agent import SmartAlertAgent
 
 def test_diagnose_and_recommend():
     """
@@ -65,6 +66,26 @@ def test_diagnose_and_recommend():
     assert "Unit #3" in report
     assert "연소기 (Combustor)" in report
     assert "테스트 결재 사유" in report
+
+    # 5. SmartAlertAgent 기능 검증 (Fallback 동작 및 채널 판단 검증)
+    alert_agent = SmartAlertAgent(api_key=None) # API Key 없음 -> Fallback 모드 강제 기동
+    
+    # 케이스 A: 주간 근무 시간대 (12:00 -> 틱 720) -> 슬랙 알림 발신
+    res_day = alert_agent.run_alert_logic(unit_id=3, tick=720, status="inspect", rul=45.0)
+    assert "[Fallback]" in res_day
+    assert "슬랙" in res_day
+    
+    # 케이스 B: 야간 시간대 (02:00 -> 틱 120), 다음 비행까지 여유 있음 -> 슬랙 알람 (전화 깨우지 않음)
+    # Unit 3의 다음 비행 예정: 3*7+13%25+2 = 11사이클 (여유)
+    res_night_safe = alert_agent.run_alert_logic(unit_id=3, tick=120, status="inspect", rul=45.0)
+    assert "[Fallback]" in res_night_safe
+    assert "슬랙" in res_night_safe
+    
+    # 케이스 C: 야간 시간대 (02:00 -> 틱 120), 다음 비행 임박 -> 전화 호출 발신
+    # Unit 9의 다음 비행 예정: 9*7+13%25+2 = 3사이클 (임박)
+    res_night_urgent = alert_agent.run_alert_logic(unit_id=9, tick=120, status="danger", rul=15.0)
+    assert "[Fallback]" in res_night_urgent
+    assert "전화 호출" in res_night_urgent
 
 if __name__ == "__main__":
     test_diagnose_and_recommend()
