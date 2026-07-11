@@ -11,7 +11,7 @@
 * **불확실성($\sigma$) 실시간 연산**: 개별 Decision Tree 예측치들의 표준편차를 기반으로 모델의 예측 **불확실성(Uncertainty)**을 도출하여 의사결정의 신뢰도를 제공합니다.
 * **구간 선형 모델(Piecewise Linear) 학습**: 조기 마모 데이터 노이즈 오인 방지를 위해 RUL 상한선을 **125 사이클**로 클리핑하여 예측 정확도(RMSE)를 최적화했습니다.
 
-### 2. 👥 7대 에이전트 기반 MRO 협동 파이프라인
+### 2. 👥 8대 에이전트 기반 MRO 협동 파이프라인
 * **TelemetryStreamAgent**: 엔진의 비행 사이클 증가 및 RUL 차감, 정비 복원을 관리하는 시간 제어 장치.
 * **CrisisDetectionAgent**: RUL 임계치(Danger: 20, Inspect: 50) 기준 등급 분류 및 리스크 점수(`risk_score`) 연산.
 * **SituationQueryAgent**: 함대 건강 요약 통계 및 실시간 상위 위험군 큐(Critical Queue) 도출.
@@ -19,6 +19,7 @@
 * **MaintenanceDiagnosticianAgent**: 데이터 통계 변위($Z$-score)와 모델 피처 중요도를 결합해 이상 징후 발생 센서(TOP 3) 정밀 진단.
 * **ActionRecommendationAgent**: 진단 부품별 조치 지침 및 예상 소요 공임(Man-Hours) 가이드 매핑.
 * **MaintenanceReportAgent**: OpenAI API 연동을 통한 지능형 정비 작업 지시서 작성.
+* **SmartAlertAgent**: 위기 등급에 따른 현장 알람(슬랙/TTS 전화) 전송 여부 및 발신 수단을 자율 판단하는 가드 에이전트.
 
 ### 3. ✍️ OpenAI LLM 기반 지능형 정비 작업 지시서 (Work Order)
 * **GPT-4o-mini 실시간 연동**: 상급자 최종 결재 승인 시, 실무자가 즉시 작업에 투입될 수 있는 고품질 한글 작업 지시서를 실시간 생성합니다.
@@ -40,7 +41,13 @@
 * **그리드 뷰 시각화**: 엔진의 실시간 건강 등급을 색상 카드(건강: 녹색, 점검: 황색, 위험: 적색, 결재대기: 주황)로 표기하며, 정비 중인 엔진은 보라색 펄스 애니메이션이 활성화됩니다.
 * **실시간 통계 및 차트**: 전체 함대 요약 통계 배지, 위험도 정렬 뷰, 그리고 현재 클릭한 엔진의 각 센서별 변동 추이($Z$-score) 차트를 실시간으로 갱신 렌더링합니다.
 
-### 6. 📊 4대 정비 정책 비교 시뮬레이션
+### 6. 🚨 지능형 알람 필터링 및 피로 방지 에이전트 (SmartAlertAgent)
+* **알람 피로도(Alert Fatigue) 방어**: 잦은 일반적인 경고(`inspect` 상태) 시에는 현업 작업자 호출(슬랙/전화)을 완전히 차단하고, 오직 웹 대시보드 로그에만 조용히 노출합니다.
+* **자율 채널 선정 (LangChain ReAct)**: 치명적인 고장 징후(`danger` 상태) 감지 시에만 가상 비행 스케줄 및 시각 정보를 자율 분석하여 전달을 분기합니다.
+  * **주간 근무 및 시간 여유**: 공식 **슬랙 채널(`trigger_emergency_slack`)** 전송 및 기록 보존.
+  * **야간 근무 & 비행 임박 (< 5 사이클)**: 잠든 정비사를 물리적으로 깨우기 위한 **자동 TTS 비상 유선 전화 호출(`trigger_tts_voice_call`)** 연결.
+
+### 7. 📊 4대 정비 정책 비교 시뮬레이션
 * 제약된 슬롯 하에서 어떤 정책이 정비 비용과 고장률을 최소화하는지 비교 분석을 지원합니다.
   1. `orchestrator` (AI 종합 리스크 기반 배정 - 제안 방식)
   2. `shortest_predicted_rul` (단순 잔여 수명 우선)
@@ -58,7 +65,8 @@ engine-check-dashboard/
 │   ├── data_loader.py          # 시계열 이동평균 등 롤링 피처 전처리
 │   ├── benchmark_predictor.py  # Random Forest 기반 RUL 예측 및 불확실성 연산
 │   ├── fleet_engine.py         # 정책 시뮬레이터 (오프라인 정책 비교)
-│   └── mro_agents.py           # 7대 역할별 MRO 에이전트 파이프라인
+│   ├── mro_agents.py           # 7대 역할별 MRO 에이전트 파이프라인
+│   └── alert_agent.py          # 지능형 알람 필터링 및 비상 채널 제어 에이전트
 │
 ├── ui/                         # 관제 콘솔 웹 프론트엔드 자원
 │   ├── index.html              # 메인 대시보드 마크업
