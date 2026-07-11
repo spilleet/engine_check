@@ -418,15 +418,17 @@ class RealtimeFleetSimulator:
                 diag = self.diagnostician.diagnose(self.frame, unit)
                 anomalies = [item["sensor"] for item in diag.get("anomalies", [])]
                 
-                # SmartAlertAgent 호출하여 최적의 알람 전송 수단 및 요약 전송 판별
-                alert_desc = self.alert_agent.run_alert_logic(unit, self.tick, current, float(row.rul), anomalies)
-                self.events.append(
-                    {
-                        "time": now,
-                        "agent": "smart_alert_agent",
-                        "message": f"[알람 에이전트] {alert_desc}"
-                    }
-                )
+                # SmartAlertAgent 호출을 백그라운드 스레드로 비동기 처리하여 실시간 스트림 동결 방지
+                def _async_alert(u=unit, t=self.tick, c=current, r=float(row.rul), anoms=anomalies, n=now):
+                    desc = self.alert_agent.run_alert_logic(u, t, c, r, anoms)
+                    with self.lock:
+                        self.events.append({
+                            "time": n,
+                            "agent": "smart_alert_agent",
+                            "message": f"[알람 에이전트] {desc}"
+                        })
+                
+                threading.Thread(target=_async_alert, daemon=True).start()
             self.last_status[unit] = current
         return changed
 
