@@ -62,6 +62,7 @@ class RealtimeFleetSimulator:
         # SmartAlertAgent 초기화 (환경 변수의 API 키 전달)
         import os
         self.alert_agent = SmartAlertAgent(api_key=os.environ.get("OPENAI_API_KEY"))
+        self.lock = threading.Lock()
         
         self.tick = 0        # 시뮬레이션 경과 시간(초 단위)
         self.pointer = 0     # 텔레메트리 값을 순차 감소시키기 위해 활성 엔진을 가리키는 순환 포인터
