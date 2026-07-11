@@ -7,11 +7,22 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, Tool
 
 ROOT = pathlib.Path(__file__).parent.parent
 
-# --- 1. 가상 데이터베이스 및 로그 도구 파일 정의 ---
+# =========================================================================
+# 1. 가상 데이터베이스 및 로그 유틸리티 정의 (현장 환경 시뮬레이션용)
+# =========================================================================
+
 def _get_mock_flight_schedule(unit_id: int) -> int:
+    """
+    [시뮬레이션 모사] 대상 엔진의 다음 비행 일정(이륙 예정 시간)까지 남은 사이클 수를 반환합니다.
+    실제 현장에서는 항공 스케줄 DB를 조회하는 API 호출과 매핑됩니다.
+    """
     return (unit_id * 7 + 13) % 25 + 2
 
 def _get_mock_contact(unit_id: int) -> dict:
+    """
+    [시뮬레이션 모사] 대상 엔진이 배치된 정비구역(Zone)과 담당 정비 책임자의 인적사항을 반환합니다.
+    에이전트가 어떤 정비사에게 연락할지 대상자(이름, 전화번호, 슬랙채널)를 식별하기 위해 사용됩니다.
+    """
     zones = ["A", "B", "C"]
     zone = zones[unit_id % 3]
     managers = ["김정비 과장", "이대리 대리", "박팀장 팀장"]
@@ -26,6 +37,9 @@ def _get_mock_contact(unit_id: int) -> dict:
     }
 
 def _log_alert(message: str):
+    """
+    [로그 보존] 외부로 발신된 알람 이력을 'reports/alerts.log' 파일에 영구 기록합니다.
+    """
     log_dir = ROOT / "reports"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "alerts.log"
@@ -33,7 +47,10 @@ def _log_alert(message: str):
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {message}\n")
 
-# --- 2. LangChain 에이전트용 Tools 정의 ---
+
+# =========================================================================
+# 2. LangChain 에이전트 전용 Tools 정의 (자율적 수단 판단용)
+# =========================================================================
 
 @tool
 def check_current_time_context(tick: int) -> str:
@@ -43,10 +60,11 @@ def check_current_time_context(tick: int) -> str:
     mins = minutes_in_day % 60
     time_str = f"{hours:02d}:{mins:02d}"
     
+    # 22:00 (1320분) 이후 혹은 08:00 (480분) 이전은 야간 비출근 시간대로 규정
     if minutes_in_day >= 1320 or minutes_in_day < 480:
-        return f"현재 시각 {time_str} [NIGHT_OFF_HOURS] (야간 비출근 시간대 - 비상 관리자 숙면 중. 극도로 시급한 경우에만 전화 발신 필요)"
+        return f"현재 시각 {time_str} [NIGHT_OFF_HOURS] (야간 비출근 시간대 - 현장 정비사 수면 중. 절대 긴급한 경우에만 수신 거부 해제용 전화 발신 권장)"
     else:
-        return f"현재 시각 {time_str} [DAY_SHIFT] (주간 교대 시간대 - 정상 근무 중)"
+        return f"현재 시각 {time_str} [DAY_SHIFT] (주간 교대 시간대 - 전체 근무 중)"
 
 @tool
 def get_next_flight_schedule(unit_id: int) -> str:
@@ -76,12 +94,18 @@ def trigger_tts_voice_call(unit_id: int, phone_number: str, manager_name: str, m
     _log_alert(alert_msg)
     return "정비사 비상 유선 전화 자동 연결 및 TTS 지침 안내 완료"
 
-# --- 3. SmartAlertAgent 클래스 구현 ---
+
+# =========================================================================
+# 3. SmartAlertAgent 클래스 구현 (알람 피로도 관리 적용)
+# =========================================================================
 
 class SmartAlertAgent:
     """
-    위기 감지 시 현재 시간대(주/야)와 엔진 비행 예정 시간의 시급성을 자율 종합 판단하여
-    슬랙 채널 전송 또는 정비사 긴급 전화 호출(TTS Voice Call)을 차등 실행하는 지능형 가드 에이전트.
+    [지능형 가드 에이전트]
+    센서 전이 및 RUL 급락 발생 시 알람 피로도(Alert Fatigue)를 원천 차단하기 위해
+    1. 'inspect(점검요망)'와 같은 경고 수준은 오직 대시보드 로컬 로그에만 출력하도록 통제하며,
+    2. 오직 'danger(위험)' 수준의 치명적 경보일 때만 시각(낮/밤) 및 다음 비행의 긴급성을 종합 평가해 
+       슬랙 전송 또는 자동 TTS 유선 전화를 차등 발신합니다.
     """
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key
@@ -93,22 +117,30 @@ class SmartAlertAgent:
             trigger_tts_voice_call
         ]
         
+        # 알람 피로 방지 규칙이 반영된 시스템 프로토콜 정의
         self.system_prompt = """당신은 항공 제트엔진 MRO 관제소의 지능형 알람 필터링 에이전트(SmartAlertAgent)입니다.
-당신의 주 업무는 엔진 이상 징후 감지 시, 정비사들의 알람 피로(Alert Fatigue)를 막고 적절한 조치를 취하도록 다음 규칙에 따라 알람 수위와 채널을 결정하는 것입니다.
+당신의 임무는 엔진 상태 이탈 정보(status, RUL)를 바탕으로, 현장 작업자의 피로도를 최소화하며 긴급성을 제어하는 것입니다.
 
-[알람 선택 규칙]
-1. `check_current_time_context` 도구로 야간(NIGHT_OFF_HOURS)인지 주간(DAY_SHIFT)인지 판별하십시오.
-2. `get_next_flight_schedule` 도구로 정비 시점까지 남은 비행 스케줄(사이클) 여유를 확인하십시오.
-3. `get_fleet_contacts` 도구로 수신할 담당 정비사의 연락처를 확인하십시오.
-4. 아래에 따라 최종 도구를 발신하십시오:
-   - [규칙 1: 주간(DAY_SHIFT)인 경우]
-     정비사들이 근무 중이므로, 슬랙 공식 알람 도구(`trigger_emergency_slack`)만 발신하여 교대 정비원 전체가 공유하도록 하십시오.
-   - [규칙 2: 야간(NIGHT_OFF_HOURS)이고 다음 비행까지 여유(5 사이클 초과)가 있는 경우]
-     정비사가 자고 있으므로 슬랙 공식 알람 도구(`trigger_emergency_slack`)만 전송해 기록을 남기고, 밤샘 전화를 걸어 깨우지 마십시오.
-   - [규칙 3: 야간(NIGHT_OFF_HOURS)이고 다음 비행이 임박(5 사이클 이하)한 긴급 상황인 경우]
-     매우 긴박합니다. 자고 있는 정비사를 즉각 깨워야 하므로 자동 TTS 비상 전화 도구(`trigger_tts_voice_call`)를 호출하십시오.
+[필수 의사결정 프로토콜]
+1. 먼저 들어온 이상 상태(status)가 'inspect'(경고/점검요망)인지 'danger'(위험/고장임박)인지 확인하십시오.
+   - [피로 방지 규칙 - inspect 상태인 경우]:
+     정비사를 방해해서는 안 됩니다. 슬랙이나 유선전화 도구를 절대 호출하지 마십시오.
+     단순히 대시보드 노출을 위해 "[대시보드 로그 전용] 엔진 #X 점검요망 상태 감지 - 외부 발신 생략." 포맷의 최종 답변만 리턴하고 강제 종료하십시오.
+   
+2. 상태가 'danger'인 경우 아래 도구들을 사용해 수위를 판단하십시오:
+   - `check_current_time_context`로 야간(NIGHT_OFF_HOURS)인지 주간(DAY_SHIFT)인지 판별하십시오.
+   - `get_next_flight_schedule`로 정비 시점까지 남은 비행 스케줄(사이클) 여유를 확인하십시오.
+   - `get_fleet_contacts`로 수신할 담당 정비사의 연락처를 확인하십시오.
+   
+3. 'danger' 경보의 전송 수단 분기법:
+   - [주간(DAY_SHIFT)인 경우]: 
+     근무 중이므로 슬랙 공식 알람 도구(`trigger_emergency_slack`)만 발신하십시오.
+   - [야간(NIGHT_OFF_HOURS) & 다음 비행까지 여유(5 사이클 초과)가 있는 경우]: 
+     자고 있는 정비사를 깨우지 않고, 출근 후 볼 수 있도록 슬랙 공식 알람 도구(`trigger_emergency_slack`)만 발신하십시오.
+   - [야간(NIGHT_OFF_HOURS) & 다음 비행이 임박(5 사이클 이하)한 긴급 상황인 경우]: 
+     매우 치명적입니다. 잠든 정비사를 즉각 깨워야 하므로 자동 TTS 비상 전화 도구(`trigger_tts_voice_call`)를 호출하십시오.
 
-도구 실행 결과를 얻은 후, 어떤 생각(Thought) 과정을 거쳐 최종 알람을 실행했는지 간략하고 전문적인 한글 답변으로 요약하여 종료해 주십시오."""
+도구 실행 결과를 얻은 후, 거쳐간 생각(Thought)과 최종 조치 결과를 한글 전문 답변으로 정중히 요약하십시오."""
 
         self.model_with_tools = None
         if self.api_key:
@@ -121,8 +153,9 @@ class SmartAlertAgent:
 
     def run_alert_logic(self, unit_id: int, tick: int, status: str, rul: float) -> str:
         """
-        위기 상황을 판단하여 알람을 결정합니다.
-        API Key가 없거나 에러가 발생한 경우 정적 대체 로직(Static Fallback)으로 작동합니다.
+        [주요 진입점]
+        이상 감지된 엔진의 정보를 종합해 경보 여부 및 발신 채널을 판단합니다.
+        API Key가 활성화되어 있지 않으면 정적 규칙 엔진(Static Fallback)이 작동합니다.
         """
         if not self.model_with_tools:
             return self._run_static_fallback(unit_id, tick, status, rul)
@@ -130,28 +163,28 @@ class SmartAlertAgent:
         try:
             user_input = f"엔진 #{unit_id}에서 이상 상태 '{status}' 감지 (예측 RUL: {rul:.1f}). 시뮬레이션 틱: {tick}. 최적의 비상 전송 수단을 선별하여 동작시켜 줘."
             
-            # ReAct (Reasoning and Action) 루프 직접 구현
+            # ReAct (Reasoning and Action) 루프 수동 전개
             messages = [
                 SystemMessage(content=self.system_prompt),
                 HumanMessage(content=user_input)
             ]
             
-            # 최대 5회 툴 호출 반복
+            # 최대 5회 툴 호출 의사결정 루프 전개
             for i in range(5):
                 print(f"[SmartAlertAgent] Thinking Step {i+1}...")
                 response = self.model_with_tools.invoke(messages)
                 messages.append(response)
                 
-                # 툴 호출이 없으면 루프를 종료하고 최종 컨텐츠 반환
+                # AI가 도구 호출 없이 최종 텍스트 답변을 지목했거나 루프 종료 선언 시 리턴
                 if not response.tool_calls:
                     return response.content
                     
-                # 툴 실행
+                # 호출이 지정된 각 도구 실행
                 for tool_call in response.tool_calls:
                     tool_name = tool_call["name"]
                     tool_args = tool_call["args"]
                     
-                    # 매칭되는 툴 찾기
+                    # 매칭되는 툴 탐색 후 자율 실행
                     matching_tool = next((t for t in self.tools if t.name == tool_name), None)
                     if matching_tool:
                         print(f"[SmartAlertAgent] Executing Tool: {tool_name} with args: {tool_args}")
@@ -172,15 +205,24 @@ class SmartAlertAgent:
             return self._run_static_fallback(unit_id, tick, status, rul)
 
     def _run_static_fallback(self, unit_id: int, tick: int, status: str, rul: float) -> str:
-        """정적 Fallback 규칙 엔진"""
+        """
+        [정적 Fallback 규칙 엔진]
+        OpenAI API 연결 실패 혹은 미연동 시 로컬 오프라인에서 안전하게 경보 필터를 작동시킵니다.
+        """
+        # 피로 방지 규칙 1: 단순 inspect 상태는 외부로 전송하지 않고 로컬 대시보드 로깅만 수행
+        if status == "inspect":
+            return f"[대시보드 로그 전용] 엔진 #{unit_id} 점검요망 상태 감지 - 외부 발신 생략."
+            
+        # status == "danger" 인 핵심 긴급 상황
         minutes_in_day = tick % 1440
         is_night = minutes_in_day >= 1320 or minutes_in_day < 480
         remaining_cycles = _get_mock_flight_schedule(unit_id)
         contact = _get_mock_contact(unit_id)
         
-        message = f"유닛 #{unit_id} 상태 '{status}' 이탈 (RUL: {rul:.1f})"
+        message = f"유닛 #{unit_id} 위험 상태 '{status}' 이탈 (RUL: {rul:.1f})"
         
         if is_night and remaining_cycles <= 5:
+            # 야간 초긴급 상황 -> 유선전화 TTS 호출
             trigger_tts_voice_call.invoke({
                 "unit_id": unit_id,
                 "phone_number": contact["phone"],
@@ -189,6 +231,7 @@ class SmartAlertAgent:
             })
             return f"[Fallback] 야간 초긴급 전화 호출 완료 (대상: {contact['manager']})"
         else:
+            # 주간 혹은 야간이어도 다음 비행까지 여유가 있는 경우 -> 슬랙 알림만 브로드캐스트
             trigger_emergency_slack.invoke({
                 "unit_id": unit_id,
                 "slack_channel": contact["slack_channel"],
