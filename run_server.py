@@ -414,8 +414,12 @@ class RealtimeFleetSimulator:
                     }
                 )
                 
-                # SmartAlertAgent 호출하여 최적의 알람 전송 수단 판별
-                alert_desc = self.alert_agent.run_alert_logic(unit, self.tick, current, float(row.rul))
+                # 진단 에이전트를 가동해 이상 센서 목록을 획득
+                diag = self.diagnostician.diagnose(self.frame, unit)
+                anomalies = diag.get("anomalies", [])
+                
+                # SmartAlertAgent 호출하여 최적의 알람 전송 수단 및 요약 전송 판별
+                alert_desc = self.alert_agent.run_alert_logic(unit, self.tick, current, float(row.rul), anomalies)
                 self.events.append(
                     {
                         "time": now,

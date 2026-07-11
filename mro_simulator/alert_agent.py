@@ -96,7 +96,7 @@ def trigger_tts_voice_call(unit_id: int, phone_number: str, manager_name: str, m
 
 
 # =========================================================================
-# 3. SmartAlertAgent 클래스 구현 (알람 피로도 관리 적용)
+# 3. SmartAlertAgent 클래스 구현 (알람 피로도 관리 및 LLM 요약 탑재)
 # =========================================================================
 
 class SmartAlertAgent:
@@ -106,6 +106,8 @@ class SmartAlertAgent:
     1. 'inspect(점검요망)'와 같은 경고 수준은 오직 대시보드 로컬 로그에만 출력하도록 통제하며,
     2. 오직 'danger(위험)' 수준의 치명적 경보일 때만 시각(낮/밤) 및 다음 비행의 긴급성을 종합 평가해 
        슬랙 전송 또는 자동 TTS 유선 전화를 차등 발신합니다.
+    3. [고도화 추가] 알람 발신 전 인자로 주입된 이상 센서 목록(anomalies)을 기반으로 고장의 원인과 긴급 조치 사항을 
+       LLM이 실시간 요약/작문하여 맞춤형 긴급 메시지(message)로 전달합니다.
     """
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key
@@ -117,9 +119,9 @@ class SmartAlertAgent:
             trigger_tts_voice_call
         ]
         
-        # 알람 피로 방지 규칙이 반영된 시스템 프로토콜 정의
+        # 알람 피로 방지 규칙 및 자율 요약 지침이 반영된 시스템 프로토콜 정의
         self.system_prompt = """당신은 항공 제트엔진 MRO 관제소의 지능형 알람 필터링 에이전트(SmartAlertAgent)입니다.
-당신의 임무는 엔진 상태 이탈 정보(status, RUL)를 바탕으로, 현장 작업자의 피로도를 최소화하며 긴급성을 제어하는 것입니다.
+당신의 임무는 엔진 상태 이탈 정보(status, RUL, anomalies)를 바탕으로, 현장 작업자의 피로도를 최소화하며 긴급성을 제어하고 요약 전송하는 것입니다.
 
 [필수 의사결정 프로토콜]
 1. 먼저 들어온 이상 상태(status)가 'inspect'(경고/점검요망)인지 'danger'(위험/고장임박)인지 확인하십시오.
@@ -132,13 +134,17 @@ class SmartAlertAgent:
    - `get_next_flight_schedule`로 정비 시점까지 남은 비행 스케줄(사이클) 여유를 확인하십시오.
    - `get_fleet_contacts`로 수신할 담당 정비사의 연락처를 확인하십시오.
    
-3. 'danger' 경보의 전송 수단 분기법:
+3. [알람 문구 실시간 자율 요약 (LLM 요약 멘트 작문 규칙)]:
+   도구에 전달할 `message` 매개변수 작성 시, 주입받은 '이상 센서 목록(anomalies)' 정보를 파악하여 정비사가 즉각 고장 부품과 수리 준비를 유추할 수 있도록 30자~60자 내외의 맞춤형 긴급 메시지를 한국어로 동적 생성하십시오.
+   (예: s_11이 포함된 경우 '연소기(Combustor) 노즐 이상 우려', s_12인 경우 '연소기 출구 압력 제어 이상' 등을 포함하고 조치 우선순위를 기재)
+
+4. 'danger' 경보의 전송 수단 분기법:
    - [주간(DAY_SHIFT)인 경우]: 
-     근무 중이므로 슬랙 공식 알람 도구(`trigger_emergency_slack`)만 발신하십시오.
+     근무 중이므로 슬랙 공식 알람 도구(`trigger_emergency_slack`)만 발신하십시오. (작성한 요약 메시지 전달)
    - [야간(NIGHT_OFF_HOURS) & 다음 비행까지 여유(5 사이클 초과)가 있는 경우]: 
-     자고 있는 정비사를 깨우지 않고, 출근 후 볼 수 있도록 슬랙 공식 알람 도구(`trigger_emergency_slack`)만 발신하십시오.
+     자고 있는 정비사를 깨우지 않고, 출근 후 볼 수 있도록 슬랙 공식 알람 도구(`trigger_emergency_slack`)만 발신하십시오. (작성한 요약 메시지 전달)
    - [야간(NIGHT_OFF_HOURS) & 다음 비행이 임박(5 사이클 이하)한 긴급 상황인 경우]: 
-     매우 치명적입니다. 잠든 정비사를 즉각 깨워야 하므로 자동 TTS 비상 전화 도구(`trigger_tts_voice_call`)를 호출하십시오.
+     매우 치명적입니다. 잠든 정비사를 즉각 깨워야 하므로 자동 TTS 비상 전화 도구(`trigger_tts_voice_call`)를 호출하십시오. (전화 통화로 읽어줄 핵심 음성 문장으로 가다듬은 요약 메시지 전달)
 
 도구 실행 결과를 얻은 후, 거쳐간 생각(Thought)과 최종 조치 결과를 한글 전문 답변으로 정중히 요약하십시오."""
 
@@ -151,17 +157,23 @@ class SmartAlertAgent:
             except Exception as e:
                 print(f"Warning: Failed to initialize LangChain ChatOpenAI: {e}. Running in Static Fallback Mode.")
 
-    def run_alert_logic(self, unit_id: int, tick: int, status: str, rul: float) -> str:
+    def run_alert_logic(self, unit_id: int, tick: int, status: str, rul: float, anomalies: list[str]) -> str:
         """
         [주요 진입점]
-        이상 감지된 엔진의 정보를 종합해 경보 여부 및 발신 채널을 판단합니다.
+        이상 감지된 엔진의 정보와 이상 센서 목록(anomalies)을 종합해 경보 수위를 결정하고 실시간 상황 요약을 포함해 전송합니다.
         API Key가 활성화되어 있지 않으면 정적 규칙 엔진(Static Fallback)이 작동합니다.
         """
         if not self.model_with_tools:
-            return self._run_static_fallback(unit_id, tick, status, rul)
+            return self._run_static_fallback(unit_id, tick, status, rul, anomalies)
             
         try:
-            user_input = f"엔진 #{unit_id}에서 이상 상태 '{status}' 감지 (예측 RUL: {rul:.1f}). 시뮬레이션 틱: {tick}. 최적의 비상 전송 수단을 선별하여 동작시켜 줘."
+            anomalies_str = ", ".join(anomalies) if anomalies else "없음"
+            user_input = (
+                f"엔진 #{unit_id}에서 이상 상태 '{status}' 감지 (예측 RUL: {rul:.1f}). "
+                f"이상 감지된 센서 목록: [{anomalies_str}]. "
+                f"시뮬레이션 틱: {tick}. "
+                f"최적의 비상 알람 메시지를 상황에 맞게 자율 요약 작성하여 발신 도구를 구동해 줘."
+            )
             
             # ReAct (Reasoning and Action) 루프 수동 전개
             messages = [
@@ -202,9 +214,9 @@ class SmartAlertAgent:
             
         except Exception as exc:
             print(f"Warning: LangChain SmartAlertAgent run failed: {exc}. Falling back to static logic.")
-            return self._run_static_fallback(unit_id, tick, status, rul)
+            return self._run_static_fallback(unit_id, tick, status, rul, anomalies)
 
-    def _run_static_fallback(self, unit_id: int, tick: int, status: str, rul: float) -> str:
+    def _run_static_fallback(self, unit_id: int, tick: int, status: str, rul: float, anomalies: list[str]) -> str:
         """
         [정적 Fallback 규칙 엔진]
         OpenAI API 연결 실패 혹은 미연동 시 로컬 오프라인에서 안전하게 경보 필터를 작동시킵니다.
@@ -219,7 +231,12 @@ class SmartAlertAgent:
         remaining_cycles = _get_mock_flight_schedule(unit_id)
         contact = _get_mock_contact(unit_id)
         
-        message = f"유닛 #{unit_id} 위험 상태 '{status}' 이탈 (RUL: {rul:.1f})"
+        # 이상 센서명을 바탕으로 한 한글 간략 해석 맵 (정적 Fallback용)
+        sensor_map = {"s_11": "연소기 노즐 마모", "s_12": "연소기 출구 압력", "s_15": "바이패스 덕트 압력"}
+        anomalies_desc = [sensor_map.get(s, s) for s in anomalies]
+        anomalies_str = f"({', '.join(anomalies_desc)} 이상 우려)" if anomalies_desc else ""
+        
+        message = f"유닛 #{unit_id} 위험 상태 '{status}' 이탈 {anomalies_str} (예측 RUL: {rul:.1f})"
         
         if is_night and remaining_cycles <= 5:
             # 야간 초긴급 상황 -> 유선전화 TTS 호출
