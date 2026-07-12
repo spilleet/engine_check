@@ -5,10 +5,10 @@ LangGraph 기반 개별 엔진 Human-in-the-Loop (HITL) 상태 그래프 모듈.
 Ground Hold 상태로 전환하고 LangGraph의 interrupt_before 메커니즘을 통해
 인간의 의사결정을 대기합니다.
 
-진정한 HITL 3단계 흐름:
-  0단계(검증 게이트): AI 판단 검증 → 정비 진행 or 비행 복귀
-  1단계(실무자 상신): 정비 요청 및 승인서 생성 → 1차 상신
-  2단계(상급자 승인): 최종 승인 or 반려
+※ 주의: 진정한 HITL 3단계 흐름 중 본 StateGraph가 관장하는 범위는 다음과 같습니다.
+  [O] 0단계(검증 게이트): AI 판단 검증 → 정비 진행 or 비행 복귀 (LangGraph 관장)
+  [X] 1단계(실무자 상신): 정비 요청 및 승인서 생성 → 1차 상신 (외부 시뮬레이터 Imperative 로직)
+  [X] 2단계(상급자 승인): 최종 승인 or 반려 (외부 시뮬레이터 Imperative 로직)
 """
 from __future__ import annotations
 

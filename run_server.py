@@ -357,35 +357,38 @@ class RealtimeFleetSimulator:
                 self.work_orders.insert(0, order)
             self.events.append({"time": now, "agent": "human_approval", "message": f"결재 반려: 엔진 #{unit} 결재 요청을 반려 및 종결함. 사유: {reason_text}"})
             
-        elif decision == "validate":
-            # [0단계 HITL 검증 게이트] AI 판단 승인 → 정비 절차 진행
-            # Ground Hold는 유지하되, pending_supervisor 상태로 격상
-            self.frame.loc[idx, "pending_supervisor"] = True
-            self.events.append({"time": now, "agent": "human_approval", "message": f"[HITL 0단계] 엔진 #{unit} AI 판단 승인. 정비 절차로 전환합니다. 사유: {reason_text}"})
-            
-            # LangGraph 그래프에 gate_decision 주입 및 재개
+        elif decision in ["validate", "release"]:
+            # LangGraph 그래프 연동 (상태 확인 및 주입)
             config = {"configurable": {"thread_id": f"engine_{unit}"}}
             try:
-                self.hitl_graph.update_state(config, {"gate_decision": "proceed_maintenance", "gate_reason": reason_text}, as_node="validate_ground_hold")
+                state = self.hitl_graph.get_state(config)
+                # 그래프가 아직 interrupt_before 에 도달하지 않았으면 대기 중 에러 반환
+                if not state or not state.next or state.next[0] != "validate_ground_hold":
+                    raise ValueError("AI 에이전트가 아직 보고서를 작성 중입니다. 잠시 후 다시 시도해 주세요.")
+                
+                gate_dec = "proceed_maintenance" if decision == "validate" else "release_to_flight"
+                self.hitl_graph.update_state(config, {"gate_decision": gate_dec, "gate_reason": reason_text}, as_node="validate_ground_hold")
                 list(self.hitl_graph.stream(None, config))
-            except Exception:
-                pass  # 그래프가 아직 invoke되지 않은 경우 무시
-            
-        elif decision == "release":
-            # [0단계 HITL 검증 게이트] AI 판단 기각 → 즉시 비행 복귀
-            self.frame.loc[idx, "ground_hold"] = False
-            self.frame.loc[idx, "idle_cost"] = 0.0
-            self.frame.loc[idx, "grounded_at_tick"] = 0
-            self.hitl_triggered_units.discard(unit)
-            self.events.append({"time": now, "agent": "human_approval", "message": f"[HITL 0단계] 엔진 #{unit} 비행 복귀. AI 판단 기각(오경보 처리). 사유: {reason_text}"})
-            
-            # LangGraph 그래프에 gate_decision 주입 및 재개
-            config = {"configurable": {"thread_id": f"engine_{unit}"}}
-            try:
-                self.hitl_graph.update_state(config, {"gate_decision": "release_to_flight", "gate_reason": reason_text}, as_node="validate_ground_hold")
-                list(self.hitl_graph.stream(None, config))
-            except Exception:
-                pass
+                
+                # 랭그래프의 최종 결과(outcome)를 기반으로 상태 반영
+                final_state = self.hitl_graph.get_state(config)
+                outcome = final_state.values.get("outcome")
+                
+                if outcome == "maintenance_started":
+                    # [0단계 HITL 검증 게이트] AI 판단 승인 → 정비 절차 진행
+                    self.frame.loc[idx, "pending_supervisor"] = True
+                    self.events.append({"time": now, "agent": "human_approval", "message": f"[HITL 0단계] 엔진 #{unit} AI 판단 승인. 정비 절차로 전환합니다. 사유: {reason_text}"})
+                elif outcome == "released":
+                    # [0단계 HITL 검증 게이트] AI 판단 기각 → 즉시 비행 복귀
+                    self.frame.loc[idx, "ground_hold"] = False
+                    self.frame.loc[idx, "idle_cost"] = 0.0
+                    self.frame.loc[idx, "grounded_at_tick"] = 0
+                    self.hitl_triggered_units.discard(unit)
+                    self.events.append({"time": now, "agent": "human_approval", "message": f"[HITL 0단계] 엔진 #{unit} 비행 복귀. AI 판단 기각(오경보 처리). 사유: {reason_text}"})
+            except ValueError as ve:
+                raise ve
+            except Exception as e:
+                raise ValueError(f"LangGraph 연동 오류: {str(e)}")
             
         else:
             raise ValueError(f"Unknown decision: {decision}")
@@ -558,11 +561,23 @@ class RealtimeFleetSimulator:
                 }
                 
                 config = {"configurable": {"thread_id": f"engine_{unit}"}}
-                try:
-                    # 그래프가 validate_ground_hold 직전에서 자동 중단됨
-                    list(self.hitl_graph.stream(initial_state, config))
-                except Exception as exc:
-                    print(f"Warning: HITL graph invoke failed for unit {unit}: {exc}")
+                
+                def _run_graph_async(st, cfg):
+                    try:
+                        # 무거운 LLM 보고서 작성을 락 밖에서 비동기 처리
+                        list(self.hitl_graph.stream(st, cfg))
+                        # 완료 후 간단한 이벤트 로그만 락을 잡고 기록
+                        with self.lock:
+                            self.events.append({
+                                "time": self._clock(),
+                                "agent": "human_approval",
+                                "message": f"🛬 [HITL] 엔진 #{st['unit']} AI 진단 및 보고서 작성 완료. 정비 진행 여부를 결재해 주세요."
+                            })
+                    except Exception as exc:
+                        print(f"Warning: HITL graph invoke failed for unit {st['unit']}: {exc}")
+                
+                import threading
+                threading.Thread(target=_run_graph_async, args=(initial_state, config), daemon=True).start()
 
 
     def _update_costs(self) -> None:
