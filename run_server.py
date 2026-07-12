@@ -543,6 +543,7 @@ class RealtimeFleetSimulator:
                     "rul": float(row.rul),
                     "uncertainty": float(row.pred_uncertainty),
                     "cycle": int(row.stream_cycle),
+                    "maintenance_count": self.maintenance_counts.get(unit, 0),
                     "anomalies": anomalies[:5],
                     "recommendations": rec.get("checklist", []),
                     "report_md": "",
@@ -643,29 +644,34 @@ class RealtimeRequestHandler(BaseHTTPRequestHandler):
             report_md = ""
             # 1. 1차 상신(approve)이거나, 상급자 직권 승인(approve_final인데 pending 목록에 없는 경우) 시 LLM 보고서 생성
             if decision == "approve" or (decision == "approve_final" and not is_pending):
-                # 락 안에서 필요한 데이터만 신속하게 복사 및 진단 처방 도출
-                with self.lock:
-                    idx = self.simulator.frame["unit"] == unit
-                    if idx.any():
-                        row = self.simulator.frame.loc[idx].iloc[0]
-                        diag = self.simulator.diagnostician.diagnose(self.simulator.frame, unit)
-                        rec = self.simulator.recommender.recommend(diag)
-                        cycle = int(row["stream_cycle"])
-                        rul = float(row["rul"])
-                        uncertainty = float(row["pred_uncertainty"])
-                        m_count = self.simulator.maintenance_counts.get(unit, 0)
-                        reason_text = reason.strip() or "현장 정비사의 AI 처방 승인에 따라 스케줄링됨."
-                
-                # 락 바깥에서 대기시간이 긴 LLM API 호출 수행 (이 동안 다른 대시보드 API 요청 및 SSE 스트리밍은 정상 서빙됨!)
-                report_md = self.simulator.reporter.generate_markdown(
-                    unit=unit,
-                    cycle=cycle,
-                    predicted_rul=rul,
-                    uncertainty=uncertainty,
-                    recommendations=rec,
-                    reason=reason_text,
-                    maintenance_count=m_count
-                )
+                # LangGraph 체크포인터에서 비동기로 이미 생성된 보고서를 꺼내옵니다. (Zero Latency)
+                config = {"configurable": {"thread_id": f"engine_{unit}"}}
+                graph_state = self.simulator.hitl_graph.get_state(config)
+                if graph_state and hasattr(graph_state, 'values') and graph_state.values and graph_state.values.get("report_md"):
+                    report_md = graph_state.values["report_md"]
+                else:
+                    # 백업 로직 (어떤 이유로 그래프가 완료 전이거나 못 만들었을 때만 동기 호출)
+                    with self.lock:
+                        idx = self.simulator.frame["unit"] == unit
+                        if idx.any():
+                            row = self.simulator.frame.loc[idx].iloc[0]
+                            diag = self.simulator.diagnostician.diagnose(self.simulator.frame, unit)
+                            rec = self.simulator.recommender.recommend(diag)
+                            cycle = int(row["stream_cycle"])
+                            rul = float(row["rul"])
+                            uncertainty = float(row["pred_uncertainty"])
+                            m_count = self.simulator.maintenance_counts.get(unit, 0)
+                            reason_text = reason.strip() or "현장 정비사의 AI 처방 승인에 따라 스케줄링됨."
+                    
+                    report_md = self.simulator.reporter.generate_markdown(
+                        unit=unit,
+                        cycle=cycle,
+                        predicted_rul=rul,
+                        uncertainty=uncertainty,
+                        recommendations=rec,
+                        reason=reason_text,
+                        maintenance_count=m_count
+                    )
             
             # 2. 락 안에서 안전하게 정비 상태 및 보고서 업데이트 집행
             with self.lock:

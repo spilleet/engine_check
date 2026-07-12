@@ -29,6 +29,7 @@ class EngineHITLState(TypedDict):
     rul: float
     uncertainty: float
     cycle: int
+    maintenance_count: int
     
     # 진단 결과 (diagnose 노드에서 채워짐)
     anomalies: list[dict]
@@ -76,8 +77,22 @@ def generate_report(state: EngineHITLState) -> dict:
     실제 생성은 시뮬레이터의 MaintenanceReportAgent를 호출하여 수행되며,
     그 결과가 state.report_md에 주입됩니다.
     """
-    # 보고서 데이터는 트리거 시점에 이미 state에 주입되므로 패스스루
-    return {}
+    from mro_simulator.mro_agents import MaintenanceReportAgent
+    
+    agent = MaintenanceReportAgent()
+    rec_dict = {"checklist": state.get("recommendations", [])}
+    
+    report_md = agent.generate_markdown(
+        unit=state["unit"],
+        cycle=state["cycle"],
+        predicted_rul=state["rul"],
+        uncertainty=state["uncertainty"],
+        recommendations=rec_dict,
+        reason=state["trigger_reason"],
+        maintenance_count=state.get("maintenance_count", 0)
+    )
+    
+    return {"report_md": report_md}
 
 
 def validate_ground_hold(state: EngineHITLState) -> dict:
