@@ -57,7 +57,35 @@ function renderSnapshot(snapshot) {
   if (ghBanner) {
     if (groundedUnits.length > 0) {
       ghBanner.style.display = "block";
-      $("groundedCount").textContent = groundedUnits.length;
+      
+      const linksHtml = groundedUnits.map(g => `
+        <button class="grounded-shortcut-btn" data-unit="${g.unit}" style="margin: 2px 4px; padding: 6px 10px; font-size: 12px; font-weight: bold; background: #ff3d3d; color: white; border: none; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(255, 61, 61, 0.3);">
+          🛬 Engine #${g.unit} (RUL: ${Math.round(g.rul)} | $${Math.round(g.idle_cost).toLocaleString()})
+        </button>
+      `).join("");
+      
+      ghBanner.innerHTML = `
+        <div style="font-size: 13px; color: #ff6b6b; font-weight: 900; margin-bottom: 8px; text-align: center;">
+          🛬 실시간 운항 중지 엔진 (${groundedUnits.length}대 대기 중)
+        </div>
+        <div class="grounded-list" style="display: flex; flex-wrap: wrap; justify-content: center; gap: 6px;">
+          ${linksHtml}
+        </div>
+      `;
+      
+      // 숏컷 버튼 클릭 리스너 연결 (탭 이동 + 엔진 자동 선택)
+      ghBanner.querySelectorAll(".grounded-shortcut-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          // 1. 종합 관제 탭으로 전환
+          const tabBtn = document.querySelector('.tab-btn[data-tab="tab-control"]');
+          if (tabBtn) tabBtn.click();
+          
+          // 2. 해당 엔진 선택 및 렌더링
+          selectedUnit = Number(btn.dataset.unit);
+          renderFleet(snapshot.engines, snapshot.touched_units || []);
+          renderEngineDetail();
+        });
+      });
     } else {
       ghBanner.style.display = "none";
     }
