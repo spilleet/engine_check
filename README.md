@@ -264,11 +264,15 @@ engine-check-dashboard/
 │
 ├── reports/                    # 산출물 및 작업지시서 아카이브
 │   ├── submitted_orders/       # 결재 완료 작업지시서(.md)
-│   └── policy_comparison.png   # 정책 성과 비교 차트
+│   └── ...                     # 각종 결과 로그, 보고서, 차트 이미지 등
 │
-├── artifacts/                  # 학습 완료 모델 파라미터(.joblib)
+├── artifacts/                  # 학습 완료 모델 파라미터(.joblib 등) 보관 폴더
+├── build_simulation_data.py    # 데이터셋 구축 스크립트
+├── train_model.py              # 모델 학습 스크립트
+├── run_server.py               # 실시간 API·SSE 스트림 서버 (메인 실행 파일)
+├── requirements.txt            # 파이썬 패키지 의존성 목록
 ├── .env                        # OPENAI_API_KEY 설정 파일 (직접 생성)
-└── run_server.py               # 실시간 API·SSE 스트림 서버
+└── .gitignore                  # 깃허브 제외 파일 목록
 ```
 
 
