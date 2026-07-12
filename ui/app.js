@@ -193,7 +193,7 @@ async function renderEngineDetail() {
   let statusStr = engine.status;
   
   if (engine.under_maintenance) {
-    recommendation = "정비 작업 지시 집행 중 (3틱 대기)";
+    recommendation = "정비 승인 건 집행 중 (3틱 대기)";
     statusStr = "under_maintenance";
   } else if (engine.pending_supervisor) {
     recommendation = "실무자 상신 완료 → 상급자 최종 결재 대기";
@@ -241,6 +241,23 @@ async function renderEngineDetail() {
     risk ? `위험점수 ${Number(risk.risk_score).toFixed(1)}` : "상위 위험 큐 외"
   ].join(" · ");
   
+  // 선택한 엔진에 연결된 결재 완료된 정비 요청 및 승인서가 있는지 조회
+  const matchingOrder = (latestSnapshot.work_orders || []).find(
+    (o) => Number(o.unit) === Number(selectedUnit) && o.report_md
+  );
+  
+  let reportBtnHtml = "";
+  if (matchingOrder) {
+    reportBtnHtml = `
+      <div class="detail-report-link" style="margin-top: 12px; padding: 10px; background: rgba(47, 103, 232, 0.1); border: 1px solid rgba(47, 103, 232, 0.3); border-radius: 8px; text-align: center;">
+        <span style="font-size: 13px; font-weight: bold; color: var(--blue); display: block; margin-bottom: 6px;">📄 생성된 정비 요청 및 승인서 존재</span>
+        <button class="view-detail-report-btn view-report-btn" data-order-id="${matchingOrder.id}" style="margin-top: 4px; width: 100%; height: 32px; font-size: 13px; font-weight: bold; cursor: pointer;">
+          📋 승인서 문서 바로보기
+        </button>
+      </div>
+    `;
+  }
+  
   $("engineDetail").className = "engine-detail";
   $("engineDetail").innerHTML = `
     <div class="detail-title">Engine #${engine.unit}</div>
@@ -248,7 +265,21 @@ async function renderEngineDetail() {
     <div class="detail-status ${statusStr}">${recommendation}</div>
     <p>${reason}</p>
     <p>권장 근거: RUL 임계값, 예측 불확실성, 인간 피드백 가중치를 종합 계산했습니다.</p>
+    ${reportBtnHtml}
   `;
+
+  // 상세조회 영역 내 문서 보기 버튼 리스너 바인딩
+  const detailBtn = document.querySelector(".view-detail-report-btn");
+  if (detailBtn) {
+    detailBtn.addEventListener("click", () => {
+      const orderId = detailBtn.dataset.orderId;
+      const order = (latestSnapshot.work_orders || []).find((o) => o.id === orderId);
+      if (order && order.report_md) {
+        $("modalBody").innerHTML = parseMarkdown(order.report_md);
+        $("reportModal").style.display = "block";
+      }
+    });
+  }
 
   // 위험(danger), 점검(inspect) 혹은 결재대기 중일 경우 Z-score 진단 컴포넌트 렌더링
   if (engine.status === "danger" || engine.status === "inspect" || engine.pending_supervisor) {
@@ -292,18 +323,18 @@ async function renderEngineDetail() {
 
 function renderWorkOrders(orders) {
   /**
-   * 발행된 전체 정비 지시서 레코드 로그 목록을 그리고, 지시서 확인용 팝업 리스너를 매핑합니다.
+   * 발행된 전체 정비 요청 및 승인서 레코드 로그 목록을 그리고, 문서 확인용 팝업 리스너를 매핑합니다.
    */
   if (!orders.length) {
-    $("workOrders").innerHTML = `<div class="empty-line">아직 발행된 작업지시가 없습니다.</div>`;
+    $("workOrders").innerHTML = `<div class="empty-line">아직 발행된 정비 요청 및 승인서가 없습니다.</div>`;
     return;
   }
   $("workOrders").innerHTML = orders.map((order) => {
     const reportBtn = order.report_md ? `
-      <button class="view-report-btn" data-order-id="${order.id}">📋 정비 작업 지시서 보기</button>
+      <button class="view-report-btn" data-order-id="${order.id}">📋 정비 요청 및 승인서 보기</button>
     ` : "";
     return `
-      <div class="work-order ${order.decision}">
+      <div class="work-order ${order.decision}" data-unit="${order.unit}" style="cursor: pointer; margin-bottom: 8px;">
         <b>${order.id}</b>
         <span>[${order.time}] Engine #${order.unit} · ${order.decision} · ${order.status}</span>
         <em>${order.reason}</em>
@@ -312,14 +343,42 @@ function renderWorkOrders(orders) {
     `;
   }).join("");
 
-  // 지시서 보기 버튼 리스너 바인딩
+  // 지시서 보기 버튼 리스너 바인딩 (탭 전환 + 엔진 선택 + 모달 노출)
   document.querySelectorAll(".view-report-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation(); // 카드 클릭 이벤트 전파 차단
       const orderId = btn.dataset.orderId;
       const order = orders.find((o) => o.id === orderId);
       if (order && order.report_md) {
+        // 1. 종합 관제 탭으로 전환
+        const tabBtn = document.querySelector('.tab-btn[data-tab="tab-control"]');
+        if (tabBtn) tabBtn.click();
+        
+        // 2. 해당 엔진 선택 및 상세 뷰 로드
+        selectedUnit = Number(order.unit);
+        renderFleet(latestSnapshot.engines, latestSnapshot.touched_units || []);
+        renderEngineDetail();
+        
+        // 3. 보고서 모달 팝업 전시
         $("modalBody").innerHTML = parseMarkdown(order.report_md);
         $("reportModal").style.display = "block";
+      }
+    });
+  });
+
+  // 개별 Work Order 카드 자체 클릭 리스너 바인딩 (탭 전환 + 엔진 선택)
+  document.querySelectorAll(".work-order").forEach((card) => {
+    card.addEventListener("click", () => {
+      const unit = Number(card.dataset.unit);
+      if (unit && latestSnapshot) {
+        // 1. 종합 관제 탭으로 전환
+        const tabBtn = document.querySelector('.tab-btn[data-tab="tab-control"]');
+        if (tabBtn) tabBtn.click();
+        
+        // 2. 해당 엔진 선택 및 상세 뷰 로드
+        selectedUnit = unit;
+        renderFleet(latestSnapshot.engines, latestSnapshot.touched_units || []);
+        renderEngineDetail();
       }
     });
   });
@@ -403,17 +462,42 @@ document.querySelectorAll(".decision-buttons button").forEach((button) => {
     if (!selectedUnit) return;
     const decision = button.dataset.decision;
     const reason = $("decisionReason").value;
-    const response = await fetch("/api/action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ unit: selectedUnit, decision, reason }),
-    });
-    if (!response.ok) {
-      $("agentLog").innerHTML = `<div class="log-entry crisis_detector">조치 요청 실패: ${response.status}</div>` + $("agentLog").innerHTML;
-      return;
+    
+    // 로더 노출 및 버튼 영역 숨김
+    const loader = $("decisionLoader");
+    const buttonGroup = document.querySelector(".decision-buttons");
+    if (loader) loader.style.display = "flex";
+    if (buttonGroup) buttonGroup.style.display = "none";
+    
+    try {
+      const response = await fetch("/api/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unit: selectedUnit, decision, reason }),
+      });
+      if (!response.ok) {
+        $("agentLog").innerHTML = `<div class="log-entry crisis_detector">조치 요청 실패: ${response.status}</div>` + $("agentLog").innerHTML;
+        return;
+      }
+      $("decisionReason").value = "";
+      const newSnapshot = await response.json();
+      renderSnapshot(newSnapshot);
+      
+      // 만약 방금 승인한 건이고 보고서 내용이 있다면 즉시 팝업 표시
+      if (decision === "approve" || decision === "approve_final") {
+        const matchingOrder = newSnapshot.work_orders.find(o => Number(o.unit) === Number(selectedUnit) && o.report_md);
+        if (matchingOrder) {
+          $("modalBody").innerHTML = parseMarkdown(matchingOrder.report_md);
+          $("reportModal").style.display = "block";
+        }
+      }
+    } catch (err) {
+      $("agentLog").innerHTML = `<div class="log-entry crisis_detector">네트워크 오류: ${err.message}</div>` + $("agentLog").innerHTML;
+    } finally {
+      // 로더 감춤 및 버튼 영역 복원
+      if (loader) loader.style.display = "none";
+      if (buttonGroup) buttonGroup.style.display = "grid";
     }
-    $("decisionReason").value = "";
-    renderSnapshot(await response.json());
   });
 });
 

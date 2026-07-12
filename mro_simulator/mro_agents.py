@@ -369,10 +369,10 @@ class ActionRecommendationAgent:
 class MaintenanceReportAgent:
     """
     모듈식으로 추천된 정비 가이드 체크리스트와 장비 계측 데이터를 융합해
-    현장 서명 서식이 포함된 표준 마크다운(Markdown) 정비 작업 지시서를 자동 발행하는 리포트 에이전트.
+    현장 서명 서식이 포함된 표준 마크다운(Markdown) 정비 요청 및 승인서를 자동 발행하는 리포트 에이전트.
     """
     def _generate_static_markdown(self, unit: int, cycle: int, predicted_rul: float, uncertainty: float, recommendations: dict, reason: str = "") -> str:
-        """API 호출 실패 혹은 API Key 부재 시 활용할 Fallback 정적 마크다운 작업 지시서 생성기."""
+        """API 호출 실패 혹은 API Key 부재 시 활용할 Fallback 정적 마크다운 정비 요청 및 승인서 생성기."""
         checklist_md = ""
         for idx, item in enumerate(recommendations.get("checklist", []), 1):
             checklist_md += f"{idx}. **[{item['part']}]** {item['action']} (센서 {item['sensor']} {item['deviation']} 감지, 예상 소요 시간: {item['hours']}시간)\n"
@@ -380,13 +380,13 @@ class MaintenanceReportAgent:
         if not checklist_md:
             checklist_md = "1. **[엔진 전체]** 일반 예방정비 및 센서 오정렬 교정 작업 (예상 소요 시간: 1.0시간)\n"
 
-        report = f"""# 🛠️ 정비 작업 지시서 (Work Order)
+        report = f"""# 🛠️ 정비 요청 및 승인서 (Maintenance Request & Approval)
 
 ## 1. 장비 기본 정보
 * **대상 장비**: 제트 엔진 Unit #{unit}
 * **현재 구동 시간**: {cycle} Cycles
 * **정비 시점 예측 RUL**: {predicted_rul:.1f} Cycles (예측 오차 신뢰도 불확실성: ±{uncertainty:.1f})
-* **지시서 생성일**: 실시간 시뮬레이션 기반 자동 작성
+* **문서 생성일**: 실시간 시뮬레이션 기반 자동 작성
 
 ## 2. 작업 사유 및 결재자 코멘트
 > {reason or "현장 정비사의 AI 처방 승인에 따라 스케줄링됨."}
@@ -406,7 +406,7 @@ class MaintenanceReportAgent:
     def generate_markdown(self, unit: int, cycle: int, predicted_rul: float, uncertainty: float, recommendations: dict, reason: str = "", maintenance_count: int = 0) -> str:
         """
         3대 다중 에이전트(기술 서기, 재무 플래너, 품질 에디터) 협동 및 자가 검토(Reflection) 파이프라인과
-        결정론적 파이썬 팩트체크 가드레일을 결합해 완벽한 정비 작업 지시서를 자동 작성합니다.
+        결정론적 파이썬 팩트체크 가드레일을 결합해 완벽한 정비 요청 및 승인서를 자동 작성합니다.
         """
         import os
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -576,13 +576,13 @@ class MaintenanceReportAgent:
                     print(f"[-] 품질 검수 반려 (이력 {iteration}회차). 피드백:\n{feedback}")
             
             # 최종 마크다운 서식으로 단락 합성
-            final_report = f"""# 🛠️ 정비 작업 지시서 (Work Order)
+            final_report = f"""# 🛠️ 정비 요청 및 승인서 (Maintenance Request & Approval)
 
 ## 1. 장비 기본 정보
 * **대상 장비**: 제트 엔진 Unit #{unit}
 * **현재 구동 시간**: {cycle} Cycles
 * **정비 시점 예측 RUL**: {predicted_rul:.1f} Cycles (예측 오차 신뢰도 불확실성: ±{uncertainty:.1f})
-* **지시서 생성일**: 실시간 시뮬레이션 기반 자동 작성
+* **문서 생성일**: 실시간 시뮬레이션 기반 자동 작성
 
 ---
 

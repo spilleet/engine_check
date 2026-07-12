@@ -118,6 +118,13 @@
                 <button id="btnDefer" data-decision="defer">모니터링 보류</button>
                 <button id="btnReject" data-decision="reject">결재 반려</button>
               </div>
+
+              <!-- AI 에이전트 결재 처리 로딩 프로그레스바 (빙글빙글 도는 효과) -->
+              <div id="decisionLoader" class="loader-container" style="display: none;">
+                <div class="spinner"></div>
+                <div style="margin-top: 8px; font-weight: bold; color: var(--blue);">AI 에이전트 협동 검수 및 승인서 작성 중...</div>
+                <div style="font-size: 11px; margin-top: 4px;">품질 검수와 자가 수정 루프 진행으로 약 10~15초 소요됩니다.</div>
+              </div>
             </section>
           </div>
 
@@ -146,7 +153,7 @@
     </div>
   </main>
 
-  <!-- 정비 작업 지시서 문서 확인용 모달 팝업 창 -->
+  <!-- 정비 요청 및 승인서 문서 확인용 모달 팝업 창 -->
   <div id="reportModal" class="modal">
     <div class="modal-content">
       <span class="close-btn" id="closeModal">&times;</span>

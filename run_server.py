@@ -211,11 +211,11 @@ class RealtimeFleetSimulator:
         top_risks = self.query.top_risks(self.frame)
         return self._payload("00:00", [], summary, top_risks, [])
 
-    def manual_decision(self, unit: int, decision: str, reason: str = "") -> dict:
+    def manual_decision(self, unit: int, decision: str, reason: str = "", report_md: str = "") -> dict:
         """
         인간 관제사 개입(HITL)에 따른 2단계 의사결정을 실시간 반영합니다.
-        1. `approve`: 실무자 정비 오더 1차 상신. (상급자 결재 대기 `pending_supervisor` 격상 및 정비 작업 지시서 마크다운 생성)
-        2. `approve_final`: 상급자 최종 승인. (입고 대기 `under_maintenance` 상태 활성화 및 3틱 타이머 돌입, 정비 작업 지시서 로컬 파일 저장)
+        1. `approve`: 실무자 정비 오더 1차 상신. (상급자 결재 대기 `pending_supervisor` 격상 및 정비 요청 및 승인서 마크다운 생성)
+        2. `approve_final`: 상급자 최종 승인. (입고 대기 `under_maintenance` 상태 활성화 및 3틱 타이머 돌입, 정비 요청 및 승인서 로컬 파일 저장)
         3. `defer`: 실무자 모니터링 보류. (기여 가중치 `human_modifier`를 0.5로 낮추어 리스크 경보 완화)
         4. `reject`: 결재 반려 및 종결.
         """
@@ -230,19 +230,6 @@ class RealtimeFleetSimulator:
             # [1단계] 실무자 결재 요청 상신
             self.frame.loc[idx, "pending_supervisor"] = True
             
-            # 센서 데이터 진단 후 정비 오더 체크리스트 및 작업 지시서 초안 생성
-            diag = self.diagnostician.diagnose(self.frame, unit)
-            rec = self.recommender.recommend(diag)
-            report_md = self.reporter.generate_markdown(
-                unit=unit,
-                cycle=int(row["stream_cycle"]),
-                predicted_rul=float(row["rul"]),
-                uncertainty=float(row["pred_uncertainty"]),
-                recommendations=rec,
-                reason=reason_text,
-                maintenance_count=self.maintenance_counts.get(unit, 0)
-            )
-            
             # 결재 대기 중인 오더 레코드 추가
             order = {
                 "id": f"WO-REQ-{int(time.time())}-{unit:03d}",
@@ -256,7 +243,7 @@ class RealtimeFleetSimulator:
                 "report_md": report_md
             }
             self.work_orders.insert(0, order)
-            self.events.append({"time": now, "agent": "human_approval", "message": f"실무자 상신: 엔진 #{unit} 작업지서 상신. 상급자 결재 대기 중. 사유: {reason_text}"})
+            self.events.append({"time": now, "agent": "human_approval", "message": f"실무자 상신: 엔진 #{unit} 정비 요청 및 승인서 상신. 상급자 결재 대기 중. 사유: {reason_text}"})
             
         elif decision == "approve_final":
             # [2단계] 상급자 최종 승인 완료 -> 입고 및 수리 개시
@@ -273,7 +260,7 @@ class RealtimeFleetSimulator:
                     order["status"] = "under_maintenance"
                     order["time"] = now
                     
-                    # 작업 지시서 아카이브 디렉토리에 마크다운 형식의 서명 지시서 파일 저장
+                    # 정비 요청 및 승인서 아카이브 디렉토리에 마크다운 형식의 서명 문서 파일 저장
                     try:
                         out_dir = ROOT / "reports" / "submitted_orders"
                         out_dir.mkdir(parents=True, exist_ok=True)
@@ -286,17 +273,6 @@ class RealtimeFleetSimulator:
             
             if not found:
                 # 상신 단계를 거치지 않은 경우 즉시 직권 정비 실행 처리
-                diag = self.diagnostician.diagnose(self.frame, unit)
-                rec = self.recommender.recommend(diag)
-                report_md = self.reporter.generate_markdown(
-                    unit=unit,
-                    cycle=int(row["stream_cycle"]),
-                    predicted_rul=float(row["rul"]),
-                    uncertainty=float(row["pred_uncertainty"]),
-                    recommendations=rec,
-                    reason="상급자 직권 정비 승인",
-                    maintenance_count=self.maintenance_counts.get(unit, 0)
-                )
                 order = {
                     "id": f"WO-{int(time.time())}-{unit:03d}",
                     "time": now,
@@ -517,8 +493,44 @@ class RealtimeRequestHandler(BaseHTTPRequestHandler):
             decision = str(payload["decision"])
             reason = str(payload.get("reason", ""))
             
+            # 결재 대기열에 해당 유닛의 pending 요청이 있는지 확인
+            is_pending = False
             with self.lock:
-                result = self.simulator.manual_decision(unit, decision, reason)
+                for order in self.simulator.work_orders:
+                    if order["unit"] == unit and order["decision"] == "pending":
+                        is_pending = True
+                        break
+            
+            report_md = ""
+            # 1. 1차 상신(approve)이거나, 상급자 직권 승인(approve_final인데 pending 목록에 없는 경우) 시 LLM 보고서 생성
+            if decision == "approve" or (decision == "approve_final" and not is_pending):
+                # 락 안에서 필요한 데이터만 신속하게 복사 및 진단 처방 도출
+                with self.lock:
+                    idx = self.simulator.frame["unit"] == unit
+                    if idx.any():
+                        row = self.simulator.frame.loc[idx].iloc[0]
+                        diag = self.simulator.diagnostician.diagnose(self.simulator.frame, unit)
+                        rec = self.simulator.recommender.recommend(diag)
+                        cycle = int(row["stream_cycle"])
+                        rul = float(row["rul"])
+                        uncertainty = float(row["pred_uncertainty"])
+                        m_count = self.simulator.maintenance_counts.get(unit, 0)
+                        reason_text = reason.strip() or "현장 정비사의 AI 처방 승인에 따라 스케줄링됨."
+                
+                # 락 바깥에서 대기시간이 긴 LLM API 호출 수행 (이 동안 다른 대시보드 API 요청 및 SSE 스트리밍은 정상 서빙됨!)
+                report_md = self.simulator.reporter.generate_markdown(
+                    unit=unit,
+                    cycle=cycle,
+                    predicted_rul=rul,
+                    uncertainty=uncertainty,
+                    recommendations=rec,
+                    reason=reason_text,
+                    maintenance_count=m_count
+                )
+            
+            # 2. 락 안에서 안전하게 정비 상태 및 보고서 업데이트 집행
+            with self.lock:
+                result = self.simulator.manual_decision(unit, decision, reason, report_md=report_md)
             self._send_json(result)
         except Exception as exc:
             self.send_error(400, str(exc))
