@@ -24,6 +24,7 @@ from mro_simulator.mro_agents import (
     MaintenanceReportAgent,
 )
 from mro_simulator.alert_agent import SmartAlertAgent
+from mro_simulator.hitl_graph import build_hitl_graph
 
 # 루트 경로 및 UI 정적 리소스 파일이 들어있는 ui 디렉토리 경로 지정
 ROOT = Path(__file__).resolve().parent
@@ -50,6 +51,9 @@ class RealtimeFleetSimulator:
         self.frame["pending_supervisor"] = False                   # 상급자 최종 승인을 대기 중인 상태 표시
         self.frame["risk_score"] = 0.0                             # 에이전트가 계산할 리스크 점수
         self.frame["status"] = "healthy"                           # 엔진 건강 상태 문자열
+        self.frame["ground_hold"] = False                          # HITL: 결재 대기 운항 중지 (Ground Hold) 여부
+        self.frame["idle_cost"] = 0.0                              # HITL: 지상 대기 유휴 비용 누적액
+        self.frame["grounded_at_tick"] = 0                         # HITL: Ground Hold 시작 틱
         
         # 하위 분석 및 리포팅 에이전트 클래스들의 인스턴스 초기화
         self.detector = CrisisDetectionAgent()
@@ -62,6 +66,10 @@ class RealtimeFleetSimulator:
         # SmartAlertAgent 초기화 (환경 변수의 API 키 전달)
         import os
         self.alert_agent = SmartAlertAgent(api_key=os.environ.get("OPENAI_API_KEY"))
+        
+        # LangGraph HITL 그래프 초기화
+        self.hitl_graph, self.hitl_memory = build_hitl_graph()
+        self.hitl_triggered_units: set[int] = set()  # HITL 트리거가 발동된 유닛 추적
         self.lock = threading.Lock()
         
         self.tick = 0        # 시뮬레이션 경과 시간(초 단위)
@@ -173,6 +181,11 @@ class RealtimeFleetSimulator:
             if bool(self.frame.loc[idx, "maintained"].iloc[0]) or bool(self.frame.loc[idx, "under_maintenance"].iloc[0]):
                 continue
             
+            # [HITL] Ground Hold 상태인 엔진은 RUL 차감을 건너뛰고 유휴 비용만 누적
+            if bool(self.frame.loc[idx, "ground_hold"].iloc[0]):
+                self.frame.loc[idx, "idle_cost"] += 500  # 틱당 $500 유휴 비용
+                continue
+            
             # 구동 사이클 1 증가 및 잔존 수명 차감
             self.frame.loc[idx, "stream_cycle"] += 1
             self.frame.loc[idx, "rul"] = (self.frame.loc[idx, "rul"] - 1.0).clip(lower=0)
@@ -186,6 +199,9 @@ class RealtimeFleetSimulator:
         # 이전 틱 대비 상태에 변화가 생긴 엔진 추적 및 자동 정비권고 판단
         changed = self._status_changes(now)
         actions = self._maybe_act(now)
+        
+        # [HITL] 임계점 트리거 판정: danger 진입 엔진 중 아직 HITL 미발동 엔진 자동 Ground Hold
+        self._check_hitl_triggers(now)
         
         # 정비 지연 벌금 및 상태 모니터링 비용 계산
         self._update_costs()
@@ -250,6 +266,11 @@ class RealtimeFleetSimulator:
             self.frame.loc[idx, "pending_supervisor"] = False
             self.frame.loc[idx, "under_maintenance"] = True
             self.frame.loc[idx, "maintenance_remaining_ticks"] = 3
+            # [HITL] Ground Hold 해제 (정비소 입고로 전환)
+            self.frame.loc[idx, "ground_hold"] = False
+            self.frame.loc[idx, "idle_cost"] = 0.0
+            self.frame.loc[idx, "grounded_at_tick"] = 0
+            self.hitl_triggered_units.discard(unit)
             
             # 결재 대기열의 이전 요청을 찾아 최종 서명된 오더 상태로 격상
             found = False
@@ -336,6 +357,36 @@ class RealtimeFleetSimulator:
                 self.work_orders.insert(0, order)
             self.events.append({"time": now, "agent": "human_approval", "message": f"결재 반려: 엔진 #{unit} 결재 요청을 반려 및 종결함. 사유: {reason_text}"})
             
+        elif decision == "validate":
+            # [0단계 HITL 검증 게이트] AI 판단 승인 → 정비 절차 진행
+            # Ground Hold는 유지하되, pending_supervisor 상태로 격상
+            self.frame.loc[idx, "pending_supervisor"] = True
+            self.events.append({"time": now, "agent": "human_approval", "message": f"[HITL 0단계] 엔진 #{unit} AI 판단 승인. 정비 절차로 전환합니다. 사유: {reason_text}"})
+            
+            # LangGraph 그래프에 gate_decision 주입 및 재개
+            config = {"configurable": {"thread_id": f"engine_{unit}"}}
+            try:
+                self.hitl_graph.update_state(config, {"gate_decision": "proceed_maintenance", "gate_reason": reason_text}, as_node="validate_ground_hold")
+                list(self.hitl_graph.stream(None, config))
+            except Exception:
+                pass  # 그래프가 아직 invoke되지 않은 경우 무시
+            
+        elif decision == "release":
+            # [0단계 HITL 검증 게이트] AI 판단 기각 → 즉시 비행 복귀
+            self.frame.loc[idx, "ground_hold"] = False
+            self.frame.loc[idx, "idle_cost"] = 0.0
+            self.frame.loc[idx, "grounded_at_tick"] = 0
+            self.hitl_triggered_units.discard(unit)
+            self.events.append({"time": now, "agent": "human_approval", "message": f"[HITL 0단계] 엔진 #{unit} 비행 복귀. AI 판단 기각(오경보 처리). 사유: {reason_text}"})
+            
+            # LangGraph 그래프에 gate_decision 주입 및 재개
+            config = {"configurable": {"thread_id": f"engine_{unit}"}}
+            try:
+                self.hitl_graph.update_state(config, {"gate_decision": "release_to_flight", "gate_reason": reason_text}, as_node="validate_ground_hold")
+                list(self.hitl_graph.stream(None, config))
+            except Exception:
+                pass
+            
         else:
             raise ValueError(f"Unknown decision: {decision}")
 
@@ -355,7 +406,12 @@ class RealtimeFleetSimulator:
         actions: list[int],
     ) -> dict:
         """API 및 SSE로 갱신될 데이터 묶음을 구성하여 반환합니다."""
-        visible = self.frame[["unit", "stream_cycle", "rul", "pred_uncertainty", "status", "maintained", "pending_supervisor", "under_maintenance"]].copy()
+        visible = self.frame[["unit", "stream_cycle", "rul", "pred_uncertainty", "status", "maintained", "pending_supervisor", "under_maintenance", "ground_hold", "idle_cost"]].copy()
+        
+        # Ground Hold 중인 엔진 목록 (프론트엔드 알림용)
+        grounded = self.frame.loc[self.frame["ground_hold"]]
+        grounded_units = [{"unit": int(r.unit), "idle_cost": float(r.idle_cost), "rul": float(r.rul)} for r in grounded.itertuples()]
+        
         return {
             "stream_time": now,
             "tick": self.tick,
@@ -372,6 +428,7 @@ class RealtimeFleetSimulator:
             },
             "log": self.events[-12:],          # 최근 추론 로그 12개
             "work_orders": self.work_orders[-12:],  # 최근 발행 지서 12개
+            "grounded_units": grounded_units,        # HITL: 현재 Ground Hold 중인 엔진 목록
         }
 
     def _status_changes(self, now: str) -> list[int]:
@@ -424,6 +481,88 @@ class RealtimeFleetSimulator:
                 }
             )
         return []  # 권고만 하고 실제 수리는 결재 절차가 필수이므로 여기서는 미집행
+
+    def _check_hitl_triggers(self, now: str) -> None:
+        """
+        [HITL 임계점 트리거 판정]
+        danger 상태에 진입했으나 아직 HITL이 발동되지 않은 엔진을 감지하여
+        자동으로 Ground Hold(운항 중지) 상태로 전환하고 LangGraph를 기동합니다.
+        
+        트리거 조건:
+        1. status == "danger" (RUL < 20)
+        2. ground_hold == False (아직 멈추지 않은 엔진)
+        3. pending_supervisor == False (이미 결재 중이 아닌 엔진)
+        4. maintained == False (이미 정비 완료가 아닌 엔진)
+        5. under_maintenance == False (이미 정비소 입고가 아닌 엔진)
+        """
+        for row in self.frame.itertuples():
+            unit = int(row.unit)
+            
+            # 이미 HITL 트리거가 발동된 엔진은 스킵
+            if unit in self.hitl_triggered_units:
+                continue
+            
+            # 트리거 조건 판정
+            if (str(row.status) == "danger"
+                and not bool(row.ground_hold)
+                and not bool(row.pending_supervisor)
+                and not bool(row.maintained)
+                and not bool(row.under_maintenance)):
+                
+                idx = self.frame["unit"] == unit
+                
+                # 해당 엔진을 Ground Hold(운항 중지)로 전환
+                self.frame.loc[idx, "ground_hold"] = True
+                self.frame.loc[idx, "grounded_at_tick"] = self.tick
+                self.hitl_triggered_units.add(unit)
+                
+                # 트리거 사유 결정
+                diag = self.diagnostician.diagnose(self.frame, unit)
+                anomalies = diag.get("anomalies", [])
+                high_zscore = [a for a in anomalies if abs(a.get("z_score", 0)) > 2.0]
+                
+                if high_zscore:
+                    trigger_type = "zscore_anomaly"
+                    trigger_reason = f"센서 이상 감지 (Z>{2.0}σ): {', '.join(a['sensor'] for a in high_zscore[:3])}"
+                else:
+                    trigger_type = "rul_danger"
+                    trigger_reason = f"예측 RUL {float(row.rul):.1f} → danger 임계점(20) 돌파"
+                
+                self.events.append({
+                    "time": now,
+                    "agent": "crisis_detector",
+                    "message": f"🛬 [HITL] 엔진 #{unit} 자동 운항 중지(Ground Hold). {trigger_reason}. 인간 검증 대기 중."
+                })
+                
+                # LangGraph 그래프 기동 (diagnose → generate_report 까지 실행 후 interrupt)
+                rec = self.recommender.recommend(diag)
+                initial_state = {
+                    "unit": unit,
+                    "trigger_type": trigger_type,
+                    "trigger_reason": trigger_reason,
+                    "rul": float(row.rul),
+                    "uncertainty": float(row.pred_uncertainty),
+                    "cycle": int(row.stream_cycle),
+                    "anomalies": anomalies[:5],
+                    "recommendations": rec.get("checklist", []),
+                    "report_md": "",
+                    "gate_decision": None,
+                    "gate_reason": None,
+                    "approval_decision": None,
+                    "approval_reason": None,
+                    "grounded_at_tick": self.tick,
+                    "idle_ticks": 0,
+                    "idle_cost": 0.0,
+                    "outcome": None,
+                }
+                
+                config = {"configurable": {"thread_id": f"engine_{unit}"}}
+                try:
+                    # 그래프가 validate_ground_hold 직전에서 자동 중단됨
+                    list(self.hitl_graph.stream(initial_state, config))
+                except Exception as exc:
+                    print(f"Warning: HITL graph invoke failed for unit {unit}: {exc}")
+
 
     def _update_costs(self) -> None:
         """기존 baseline 수치(RUL 30이하 고장 방치에 다른 벌금)를 업데이트합니다."""

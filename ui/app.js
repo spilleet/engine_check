@@ -50,6 +50,18 @@ function renderSnapshot(snapshot) {
   renderEngineDetail();
   renderWorkOrders(snapshot.work_orders || []);
   renderLog(snapshot.log);
+
+  // HITL: Ground Hold 배너 업데이트
+  const groundedUnits = snapshot.grounded_units || [];
+  const ghBanner = $("groundHoldBanner");
+  if (ghBanner) {
+    if (groundedUnits.length > 0) {
+      ghBanner.style.display = "block";
+      $("groundedCount").textContent = groundedUnits.length;
+    } else {
+      ghBanner.style.display = "none";
+    }
+  }
 }
 
 function renderFleet(engines, touchedUnits) {
@@ -64,13 +76,15 @@ function renderFleet(engines, touchedUnits) {
       statusClass = "under_maintenance";
     } else if (engine.pending_supervisor) {
       statusClass = "pending";
+    } else if (engine.ground_hold) {
+      statusClass = "ground_hold";
     }
     const rul = Math.round(engine.rul);
     const pulse = touched.has(Number(engine.unit)) ? "pulse" : "";
     const activeClass = Number(engine.unit) === Number(selectedUnit) ? "selected" : "";
     return `
       <button class="engine ${statusClass} ${pulse} ${activeClass}" data-unit="${engine.unit}" title="Unit ${engine.unit} | cycle ${engine.stream_cycle} | ${statusLabel(statusClass)}">
-        <span class="id">#${engine.unit}</span>
+        <span class="id">${engine.ground_hold ? '🛬 ' : ''}#${engine.unit}</span>
         <span class="rul">${rul}</span>
       </button>
     `;
@@ -192,7 +206,10 @@ async function renderEngineDetail() {
   let recommendation = "정상 모니터링";
   let statusStr = engine.status;
   
-  if (engine.under_maintenance) {
+  if (engine.ground_hold) {
+    recommendation = "🛬 운항 자동 중지 (Ground Hold) — 인간 검증 대기";
+    statusStr = "ground_hold";
+  } else if (engine.under_maintenance) {
     recommendation = "정비 승인 건 집행 중 (3틱 대기)";
     statusStr = "under_maintenance";
   } else if (engine.pending_supervisor) {
@@ -211,8 +228,8 @@ async function renderEngineDetail() {
   const btnReject = $("btnReject");
 
   if (currentRole === "tech") {
-    // 실무자 모드: 1차 상신 및 보류만 표출 (결재대기, 정비중, 정비완료 엔진은 버튼 숨김)
-    if (engine.pending_supervisor || engine.under_maintenance || engine.status === "maintained") {
+    // 실무자 모드: 1차 상신 및 보류만 표출 (결재대기, 정비중, 정비완료, 지상대기 엔진은 버튼 숨김)
+    if (engine.pending_supervisor || engine.under_maintenance || engine.status === "maintained" || engine.ground_hold) {
       btnRequest.style.display = "none";
       btnDefer.style.display = "none";
     } else {
@@ -257,6 +274,19 @@ async function renderEngineDetail() {
       </div>
     `;
   }
+
+  let groundHoldInfo = "";
+  if (engine.ground_hold) {
+    const idleCost = Number(engine.idle_cost || 0);
+    groundHoldInfo = `
+      <div style="margin-top: 10px; padding: 12px; background: rgba(255, 61, 61, 0.12); border: 1px solid rgba(255, 61, 61, 0.35); border-radius: 8px;">
+        <div style="font-weight: 900; color: #ff6b6b; font-size: 14px; text-align: center;">🛬 운항 자동 중지 상태 (Ground Hold)</div>
+        <div style="margin-top: 6px; font-size: 13px;">RUL: ${rul} <span style="color: #4fc3f7; font-weight: bold;">❄️ 동결됨</span></div>
+        <div style="font-size: 13px;">누적 유휴 비용: <b style="color: #ff6b6b;">$${idleCost.toLocaleString()}</b></div>
+        <div style="font-size: 11px; color: var(--muted); margin-top: 4px;">⚠️ 결정 대기 중 매 틱마다 $500 추가 유휴 비용 발생</div>
+      </div>
+    `;
+  }
   
   $("engineDetail").className = "engine-detail";
   $("engineDetail").innerHTML = `
@@ -265,6 +295,7 @@ async function renderEngineDetail() {
     <div class="detail-status ${statusStr}">${recommendation}</div>
     <p>${reason}</p>
     <p>권장 근거: RUL 임계값, 예측 불확실성, 인간 피드백 가중치를 종합 계산했습니다.</p>
+    ${groundHoldInfo}
     ${reportBtnHtml}
   `;
 
@@ -278,6 +309,46 @@ async function renderEngineDetail() {
         $("modalBody").innerHTML = parseMarkdown(order.report_md);
         $("reportModal").style.display = "block";
       }
+    });
+  }
+
+  // HITL 0단계 검증 게이트 버튼 동적 생성 및 매핑
+  let existingGate = document.getElementById("hitlGateButtons");
+  if (existingGate) existingGate.remove();
+  
+  if (engine.ground_hold && !engine.pending_supervisor) {
+    // 0단계: 정비 진행 vs 비행 복귀 버튼 표시
+    btnRequest.style.display = "none";
+    btnDefer.style.display = "none";
+    btnFinalApprove.style.display = "none";
+    btnReject.style.display = "none";
+    
+    const gateDiv = document.createElement("div");
+    gateDiv.id = "hitlGateButtons";
+    gateDiv.className = "hitl-gate-buttons";
+    gateDiv.innerHTML = `
+      <button class="btn-proceed" data-decision="validate">✅ 정비 진행</button>
+      <button class="btn-release" data-decision="release">↩️ 비행 복귀</button>
+    `;
+    document.querySelector(".decision-buttons").after(gateDiv);
+    
+    gateDiv.querySelectorAll("button").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        if (!selectedUnit) return;
+        const loader = $("decisionLoader");
+        if (loader) loader.style.display = "flex";
+        gateDiv.style.display = "none";
+        try {
+          const response = await fetch("/api/action", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ unit: selectedUnit, decision: btn.dataset.decision, reason: "HITL 0단계 검증" }),
+          });
+          if (response.ok) renderSnapshot(await response.json());
+        } finally {
+          if (loader) loader.style.display = "none";
+        }
+      });
     });
   }
 

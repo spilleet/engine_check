@@ -938,3 +938,64 @@ th {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* --- HITL Ground Hold 상태 스타일 --- */
+.engine.ground_hold {
+  border-color: #ff3d3d;
+  background: #2b1414;
+  color: #ff6b6b;
+  animation: groundHoldPulse 0.8s infinite ease-in-out;
+}
+
+@keyframes groundHoldPulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 61, 61, 0.5); opacity: 0.85; }
+  50% { box-shadow: 0 0 0 8px rgba(255, 61, 61, 0); opacity: 1; }
+  100% { box-shadow: 0 0 0 0 rgba(255, 61, 61, 0.5); opacity: 0.85; }
+}
+
+.ground-hold-banner {
+  display: none;
+  background: rgba(255, 61, 61, 0.12);
+  border: 1px solid rgba(255, 61, 61, 0.4);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.ground-hold-banner .gh-count {
+  font-size: 22px;
+  font-weight: 900;
+  color: #ff6b6b;
+}
+
+.ground-hold-banner .gh-label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: bold;
+}
+
+.hitl-gate-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.hitl-gate-buttons button {
+  height: 38px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+  color: white;
+  border: none;
+}
+
+.hitl-gate-buttons .btn-proceed {
+  background: linear-gradient(135deg, #d32f2f, #b71c1c);
+}
+
+.hitl-gate-buttons .btn-release {
+  background: linear-gradient(135deg, #388e3c, #2e7d32);
+}
