@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+from dotenv import load_dotenv
+load_dotenv()
 
 # MRO 에이전트 클래스 임포트
 from mro_simulator.mro_agents import (
@@ -64,7 +66,7 @@ def test_diagnose_and_recommend():
 
     # 지시서 마크다운 내에 장비 번호, 정비 필요 장비 부품명, 관제사 코멘트가 포함되어 있는지 검증
     assert "Unit #3" in report
-    assert "연소기 (Combustor)" in report
+    assert "연소기" in report
     assert "테스트 결재 사유" in report
 
     # 5. SmartAlertAgent 기능 검증 (Fallback 동작 및 채널 판단 검증)

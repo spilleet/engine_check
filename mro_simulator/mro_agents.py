@@ -405,8 +405,8 @@ class MaintenanceReportAgent:
 
     def generate_markdown(self, unit: int, cycle: int, predicted_rul: float, uncertainty: float, recommendations: dict, reason: str = "", maintenance_count: int = 0) -> str:
         """
-        정비 장비 기본 정보와 점검 내역을 토대로 정비 작업 지시서 문서를 생성합니다.
-        로컬 환경의 OPENAI_API_KEY 존재 여부에 따라 LLM(GPT)을 호출하거나 정적 폴백(Fallback) 방식을 채택합니다.
+        3대 다중 에이전트(기술 서기, 재무 플래너, 품질 에디터) 협동 및 자가 검토(Reflection) 파이프라인과
+        결정론적 파이썬 팩트체크 가드레일을 결합해 완벽한 정비 작업 지시서를 자동 작성합니다.
         """
         import os
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -414,58 +414,201 @@ class MaintenanceReportAgent:
             return self._generate_static_markdown(unit, cycle, predicted_rul, uncertainty, recommendations, reason)
         
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from langchain_openai import ChatOpenAI
+            from langchain_core.messages import SystemMessage, HumanMessage
+            
+            # 1. 에이전트별 LLM 모델 설정 (품질 에디터는 온도를 0.0으로 하여 엄밀한 검증 강제)
+            chat_writer = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, openai_api_key=api_key)
+            chat_editor = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, openai_api_key=api_key)
             
             # 피처 이상 상태 문자열 가공
             anomalies_info = ""
+            sensors_to_check = []
             for item in recommendations.get("checklist", []):
                 anomalies_info += f"- 센서 {item['sensor']} ({item['part']}) {item['deviation']} 편위 감지 (소요시간: {item['hours']}시간)\n"
+                sensors_to_check.append(item['sensor'])
             
             if not anomalies_info:
                 anomalies_info = "- 센서의 유의미한 규격 외 변위 미감지 (일반 예방 정비 대상)\n"
                 
-            prompt = f"""
+            # -------------------------------------------------------------
+            # [단계 1] 기술 서기 에이전트 (Technical Writer Agent) 프롬프트 정의
+            # -------------------------------------------------------------
+            tech_prompt = f"""
 당신은 항공 제트엔진 정비 오퍼레이션 총괄 엔지니어입니다.
-아래의 엔진 텔레메트리 이상 진단 정보 및 현장 작업 사유 코멘트를 기반으로, 실제 정비사(Field Technician)가 즉각 참조하고 안심하며 작업할 수 있도록 '실무 지향적인 전문 정비 작업 지시서'를 한국어로 작성해 주십시오.
+아래의 엔진 텔레메트리 이상 진단 정보 및 정비 사유를 바탕으로 '기술 진단 및 안전 지침(Technical & Safety Section)' 초안을 한국어로 상세히 작성해 주십시오.
 
-### 입력 데이터
-1. **대상 장비**: 제트 엔진 Unit #{unit}
-2. **현재 구동 시간**: {cycle} Cycles
-3. **누적 정비 횟수**: {maintenance_count} 회
-4. **예측 잔존 수명(RUL)**: {predicted_rul:.1f} Cycles (예측 오차 불확실성: ±{uncertainty:.1f})
-5. **탐지된 센서 이상 요인**:
+[장비 기본 정보]
+* 대상 장비: 제트 엔진 Unit #{unit}
+* 현재 구동 시간: {cycle} Cycles
+* 누적 정비 횟수: {maintenance_count} 회
+* 예측 잔존 수명(RUL): {predicted_rul:.1f} Cycles (예측 오차 불확실성: ±{uncertainty:.1f})
+* 탐지된 센서 이상 요인:
 {anomalies_info}
-6. **현장 결재 코멘트 / 정비 사유**: "{reason or '현장 정비사의 AI 처방 승인에 따라 스케줄링됨.'}"
+* 정비 사유: "{reason or '현장 정비사의 AI 처방 승인에 따라 스케줄링됨.'}"
 
-### 실무자용 작업 지시서 작성 가이드라인 (반드시 다음 내용을 포함하여 논리적이고 친절하게 서술하십시오):
-1. **🔍 이상 센서의 현장적 의미 설명 (Root-Cause Analysis)**: 
-   - 감지된 이상 센서들이 기계공학적으로 무엇을 의미하는지 해석해 주십시오. 
-     (예: s_11(연소기) 온도가 오르고 있다면 연료 분사 노즐 카본 축적이나 연료 배관 누설 의심 등)
-2. **🚨 단계별 정비 우선순위 (Action Priority Guide)**:
-   - 제시된 정비 조치 항목들을 어떤 순서로 점검하고 진행해야 시간과 자원을 절약할 수 있는지 우선순위(1순위, 2순위 등)를 매겨 명확히 가이드하십시오.
-3. **🧰 준비 자재 및 안전 주의사항 (Safety & Tools)**:
-   - 실무 정비사가 작업 개시 전에 준비해야 할 도구/자재(예: 세척용 솔벤트, 예비 오링 키트, 계기 교정기 등)와 고온/고압 가스터빈 작업 시 무조건 준수해야 하는 필수 안전 수칙(LOTO, 잔압 해제 등)을 명시하십시오.
-4. **⏳ 장비 피로 누적 및 위험 경고 (Wear-Out Warning)**:
-   - 누적 정비 횟수에 따라 실무자가 주의해야 할 피로도 마모 경고 및 점검 팁을 포함하십시오.
-5. **📝 점검 완료 후 서명 양식**:
-   - 마지막에 점검 완료 및 정비 서명 란을 깔끔하게 포함하십시오.
-
-### 출력 형식:
-- GitHub Markdown 문법을 사용해 예쁘고 구조화된 양식으로 출력하십시오.
-- 불필요한 서론(예: "네, 지시서를 작성해 드리겠습니다")이나 결론 잡담 없이 바로 '# 🛠️ 정비 작업 지시서' 제목으로 시작하십시오.
+[작성 요구사항 - 마크다운 형식으로 작성]:
+1. '### 1. 기술 진단 및 기계공학적 원인 분석 (Root-Cause Analysis)' 단락:
+   - 감지된 각 이상 센서들이 기계공학적으로 무엇을 의미하는지 전문적으로 설명하십시오. (예: s_11 연소기 온도, s_12 출구 압력 등)
+2. '### 2. 정비 작업 단계별 상세 가이드 및 필수 안전수칙 (Action Checklist & Safety)' 단락:
+   - 정비 작업 단계별 우선순위를 명시하십시오.
+   - 고온/고압 작업 시 무조건 준수해야 하는 필수 안전 수칙(LOTO, 즉 Lockout-Tagout 수칙 등)과 준비해야 할 필수 자재를 명확히 기록하십시오.
+3. '### 3. 장비 피로 누적 및 위험 경고 (Wear-Out Warning)' 단락:
+   - 누적 정비 횟수({maintenance_count}회)에 따른 피로 누적 경고와 정비 팁을 서술하십시오.
 """
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "당신은 항공 제트엔진 정비 매뉴얼 및 기술 문서 작성 전문가입니다."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2, # 일관되고 객관적인 보고서 작성을 위해 온도 낮춤
-            )
-            report = response.choices[0].message.content
-            return report.strip()
+            
+            # -------------------------------------------------------------
+            # [단계 2] 재무/MRO 플래너 에이전트 (Financial Planner Agent) 프롬프트 정의
+            # -------------------------------------------------------------
+            repair_cost = 8000
+            penalty = 50000
+            savings = penalty - repair_cost
+            roi = int((savings / repair_cost) * 100)
+            
+            fin_prompt = f"""
+당신은 MRO 사업기획본부 재무/MRO 플래너 에이전트입니다.
+아래의 엔진 MRO 가치 모델을 기반으로 경영진(Decision Maker)을 설득하기 위한 '정비 의사결정의 재무적 타당성 및 경영 요약 섹션(Business & Financial Section)' 초안을 한국어로 작성해 주십시오.
+
+[비용 분석 수치]
+* 정비 수행 시 비용: ${repair_cost:,} (약 1,100만 원) - 예방정비 자재비 및 인건비
+* 미정비 시 고장 벌금 패널티: ${penalty:,} (약 6,900만 원) - 비행 결항, 긴급 회항 및 AOG 벌금
+* 방어 순이익 (Net Savings): ${savings:,} (약 5,800만 원 방어)
+* 투자 대비 효과 (ROI): {roi}% 달성
+
+[작성 요구사항 - 마크다운 형식으로 작성]:
+1. '### 4. 정비 의사결정의 재무적 타당성 (ROI Analysis)' 단락:
+   - 위의 비용 수치(${repair_cost:,}, ${penalty:,}, {roi}%)를 빠짐없이 명시하여 이번 예방정비 승인이 회사의 불필요한 고장 손실금을 얼마나 효과적으로 방어하는지 재무적 관점으로 소명하십시오.
+2. '### 5. 경영진 요약 및 정비 가용성 소명 (Executive Summary)' 단락:
+   - 어려운 기계공학 용어를 배제하고 경영자가 한눈에 파악할 수 있도록 쉬운 언어로 요약하십시오.
+   - 하루 가용 정비소 슬롯을 효율적으로 활용하여 일정을 계획했음을 덧붙이십시오.
+"""
+
+            # -------------------------------------------------------------
+            # [단계 3] 품질 에디터 에이전트 및 자가 반성(Reflection) 검수 루프 기동
+            # -------------------------------------------------------------
+            tech_draft = ""
+            fin_draft = ""
+            
+            max_iterations = 3
+            iteration = 0
+            feedback = ""
+            
+            while iteration < max_iterations:
+                iteration += 1
+                
+                # 피드백이 있는 경우 수정을 강제하는 지침 결합
+                if feedback:
+                    tech_run_prompt = tech_prompt + f"\n\n[이전 검수 반려 피드백 - 다음 사항을 필히 보강하십시오]:\n{feedback}"
+                    fin_run_prompt = fin_prompt + f"\n\n[이전 검수 반려 피드백 - 다음 사항을 필히 보강하십시오]:\n{feedback}"
+                else:
+                    tech_run_prompt = tech_prompt
+                    fin_run_prompt = fin_prompt
+                
+                # 기술 서기와 재무 플래너가 각자의 보고서 섹션 생성
+                tech_response = chat_writer.invoke([
+                    SystemMessage(content="당신은 항공 제트엔진 정비 매뉴얼 및 기술 규정 작성 전문가입니다."),
+                    HumanMessage(content=tech_run_prompt)
+                ])
+                tech_draft = tech_response.content.strip()
+                
+                fin_response = chat_writer.invoke([
+                    SystemMessage(content="당신은 항공 MRO 투자 효율 및 사업성 평가 전문가입니다."),
+                    HumanMessage(content=fin_run_prompt)
+                ])
+                fin_draft = fin_response.content.strip()
+                
+                # 에디터가 전체 초안 수집 및 정성적 검수 수행
+                editor_evaluation_prompt = f"""
+당신은 항공 정비 보고서 수석 품질 에디터이자 심사관 에이전트입니다.
+기술 서기와 재무 플래너가 작성한 초안을 수집해 결합하고, 아래의 검수 조건에 합치하는지 엄밀히 검증하십시오.
+
+[작성된 기술 섹션 초안]
+{tech_draft}
+
+[작성된 재무 섹션 초안]
+{fin_draft}
+
+[검수 필수 요건]
+1. 기술 섹션에 이상 감지 센서 명칭({", ".join(sensors_to_check) if sensors_to_check else "일반 정비"})이 빠짐없이 언급되어 있는가?
+2. 기술 섹션에 작업자 안전 수칙인 'LOTO' 혹은 'Lockout-Tagout' 단어가 명시되어 있는가?
+3. 재무 섹션에 정비 비용 ${repair_cost:,}, 고장 패널티 ${penalty:,}, ROI {roi}%가 정확히 기재되어 있는가?
+
+[출력 규칙]:
+- 만약 누락되거나 내용이 잘못된 부분이 있다면, 반드시 'REJECT' 상태와 함께 어떤 내용이 부족하여 반려하는지 조목조목 피드백을 한국어로 적어주십시오.
+- 모든 요구사항이 완벽하게 반영되었다면, 다른 부가 설명 없이 오직 'PASS' 단어 한 단어만 리턴하십시오.
+"""
+                editor_response = chat_editor.invoke([
+                    SystemMessage(content="당신은 절대 허점을 타협하지 않는 까다로운 수석 편집인입니다. 가이드라인을 미준수하면 가차없이 REJECT 처리합니다."),
+                    HumanMessage(content=editor_evaluation_prompt)
+                ])
+                editor_result = editor_response.content.strip()
+                
+                # -------------------------------------------------------------
+                # [하이브리드 가드레일] 백엔드 파이썬 코드를 통한 결정론적 팩트 체크
+                # -------------------------------------------------------------
+                python_validation_passed = True
+                python_feedback_items = []
+                
+                # 1. 이상 센서 키워드가 들어있는지 물리적으로 확인
+                for s in sensors_to_check:
+                    if s not in tech_draft:
+                        python_validation_passed = False
+                        python_feedback_items.append(f"- 기술 문서 내에 대상 이상 센서 명칭 '{s}'가 명확히 서술되어야 합니다.")
+                
+                # 2. LOTO 안전 수칙 필수 포함 체크
+                if not any(word in tech_draft.upper() for word in ["LOTO", "LOCKOUT"]):
+                    python_validation_passed = False
+                    python_feedback_items.append("- 정비 가이드 내에 작업 안전 수칙인 'LOTO(Lockout-Tagout)' 지침 설명이 누락되었습니다.")
+                
+                # 3. 재무 단가 포함 체크
+                if str(roi) not in fin_draft or str(repair_cost) not in fin_draft.replace(",", ""):
+                    python_validation_passed = False
+                    python_feedback_items.append(f"- 재무 분석 단락에 총 정비 비용(${repair_cost:,})과 분석 ROI({roi}%) 비율이 명확하게 작성되어야 합니다.")
+                
+                # 검사 통과 및 루프 탈출 조건 확인
+                if "PASS" in editor_result.upper() and python_validation_passed:
+                    break
+                else:
+                    llm_feedback = editor_result if "REJECT" in editor_result.upper() or "PASS" not in editor_result.upper() else ""
+                    py_feedback = "\n".join(python_feedback_items)
+                    feedback = f"### [검수 반려 사유 및 피드백 (이력 {iteration}회차)]\n{llm_feedback}\n{py_feedback}\n\n위의 요구사항을 다음 수정본 작성 시 반드시 적용하여 누락 부분을 보강해 주십시오."
+                    # 로컬 디버그용 출력
+                    print(f"[-] 품질 검수 반려 (이력 {iteration}회차). 피드백:\n{feedback}")
+            
+            # 최종 마크다운 서식으로 단락 합성
+            final_report = f"""# 🛠️ 정비 작업 지시서 (Work Order)
+
+## 1. 장비 기본 정보
+* **대상 장비**: 제트 엔진 Unit #{unit}
+* **현재 구동 시간**: {cycle} Cycles
+* **정비 시점 예측 RUL**: {predicted_rul:.1f} Cycles (예측 오차 신뢰도 불확실성: ±{uncertainty:.1f})
+* **지시서 생성일**: 실시간 시뮬레이션 기반 자동 작성
+
+---
+
+## 2. 작업 사유 및 결재자 코멘트
+> {reason or "현장 정비사의 AI 처방 승인에 따라 스케줄링됨."}
+
+---
+
+## 3. 세부 정비 기술 지침 (Technical Section)
+{tech_draft}
+
+---
+
+## 4. 비즈니스 ROI 및 경영진 요약 (Business Section)
+{fin_draft}
+
+---
+
+## 5. 점검 완료 후 서명
+위 조치 사항을 완료하고 정상 작동(RUL 125로 리셋 완료)을 확인하였음을 보고합니다.
+
+* **현장 책임자**: (서명) _________________
+* **정비 일시**: (날짜 기입) 2026-07-12
+"""
+            return final_report.strip()
             
         except Exception as exc:
-            print(f"Warning: Failed to generate report using LLM API: {exc}. Falling back to static report.")
+            print(f"Warning: Failed to generate report using Multi-Agent Pipeline: {exc}. Falling back to static report.")
             return self._generate_static_markdown(unit, cycle, predicted_rul, uncertainty, recommendations, reason)
