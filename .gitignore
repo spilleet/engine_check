@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 .DS_Store
 reports/
-artifacts/rul_model.joblib
+artifacts/
 *.zip
 
 
