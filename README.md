@@ -271,15 +271,7 @@ engine-check-dashboard/
 └── run_server.py               # 실시간 API·SSE 스트림 서버
 ```
 
-## 대시보드 워크플로우 이미지
 
-### 전체 워크플로우
-<img width="664" height="1550" alt="워크플로우" src="https://github.com/user-attachments/assets/7398abbd-12ba-40b7-ad4f-095a73da4bce" />
-
-### 에이전트 플로우
-<img width="1706" height="498" alt="에이전트 플로우" src="https://github.com/user-attachments/assets/9622bfc6-99e5-4266-8d40-d33e49eec555" />
-
----
 
 ## 실행 방법
 
